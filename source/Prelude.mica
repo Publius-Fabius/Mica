@@ -1,0 +1,14 @@
+-- Prelude.mica
+
+-- Ptr Locality Data
+data Ptr * -> * -> *;
+
+-- Arr Locality Data (Dynamic length)
+data Arr * -> * -> *;
+
+-- FixedArr Locality Size Data
+-- Note: Size is a 'Numeric Kind'
+data FixedArr * -> * -> * -> *; 
+
+-- Lam Locality [Captures] (Domain -> Codomain)
+data Lam * -> [*] -> * -> *;
