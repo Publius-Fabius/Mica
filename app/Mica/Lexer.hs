@@ -12,87 +12,114 @@ import Data.Void
 -- import qualified Data.List.NonEmpty as NE
 
 data MToken = 
-    TIden SourcePos String |    -- Identifier
-    TInt SourcePos Integer |    -- Integer
-    TDbl SourcePos Double |     -- Floating Point Number
-    TStr SourcePos String |     -- UTF8 String Literal
-    TOp SourcePos String |      -- Any combo (sans ws) of !#$%&*+./<=>?@\^|-~
-    TDelim SourcePos Char       -- (){}[];
+    LId SourcePos String |      -- Identifier
+    LInt SourcePos Integer |    -- Integer
+    LDbl SourcePos Double |     -- Floating Point Number
+    LStr SourcePos String |     -- UTF8 String Literal
+    LOp SourcePos String |      -- Any combo (sans ws) of !#$%&*+./<=>?@\^|-~
+    LDelim SourcePos Char |     -- (){}[];
+    LPre SourcePos String
     deriving (Show, Eq, Ord)
 
 data LexTree =
-    TParen [LexTree] |          -- Everything inside ( )
-    TCurly [LexTree] |          -- Everything inside { }
-    TBrack [LexTree] |          -- Everything inside [ ]
-    TBranch [LexTree] |         -- White space and ';'
-    TLeaf MToken
+    LParen [LexTree] |          -- Everything inside ( )
+    LCurly [LexTree] |          -- Everything inside { }
+    LBrack [LexTree] |          -- Everything inside [ ]
+    LBranch [LexTree] |         -- White space and ';'
+    LLeaf MToken
     deriving (Show, Eq)
     
 type Parser = Parsec Void Text
 
-sc :: Parser ()
-sc = L.space
-    space1
-    (L.skipLineComment "//")
-    (L.skipBlockComment "/*" "*/") 
+isNextEnd = lookAhead (eol >> pure ()) <|> lookAhead eof
+
+lPre :: Parser MToken
+lPre = do 
+    pos <- getSourcePos 
+    char '#'
+    LPre pos <$> manyTill anySingle isNextEnd
+
+lPreHeader :: Parser MToken 
+lPreHeader = try $ vsc >> lPre
+
+lPreBody :: Parser MToken 
+lPreBody = try $ eol >> vsc >> lPre
+
+vsc :: Parser () 
+vsc = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/") 
+
+hsc :: Parser ()
+hsc = L.space hspace1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/") 
 
 lexeme :: (SourcePos -> a -> MToken) -> Parser a -> Parser MToken
-lexeme c p = L.lexeme sc (c <$> getSourcePos <*> p)
+lexeme con par = (con <$> getSourcePos <*> par) <* hsc
 
 lDouble :: Parser MToken
-lDouble = lexeme TDbl L.float
+lDouble = lexeme LDbl L.float
 
 lInt :: Parser MToken
-lInt = lexeme TInt L.decimal
+lInt = lexeme LInt L.decimal
 
 lString :: Parser MToken
-lString = lexeme TStr (char '"' *> manyTill L.charLiteral (char '"'))
+lString = lexeme LStr (char '"' *> manyTill L.charLiteral (char '"'))
 
 lDelim :: Parser MToken
-lDelim = lexeme TDelim (oneOf ("(){}[];"::String))
+lDelim = lexeme LDelim (oneOf ("(){}[];"::String))
 
 lOp :: Parser MToken
-lOp = lexeme TOp (some $ oneOf ("!#$%&*+./<=>?@\\^|-~"::String))
+lOp = lexeme LOp (some $ oneOf ("~!@#$%^&*-+=|\\:?/.>,<"::String))
 
 lIden :: Parser MToken
-lIden = lexeme TIden ((:) <$> letterChar <*> many alphaNumChar)
-
-lToken :: Parser MToken
-lToken = choice [ lNumber, lString, lDelim, lOp, lIden ]
+lIden = lexeme LId ((:) <$> 
+    (letterChar <|> char '_') <*> 
+    many (alphaNumChar <|> char '_'))
 
 lNumber :: Parser MToken
 lNumber = try lDouble <|> lInt
 
-lMica :: Parser [MToken]
-lMica = sc *> many lToken <* eof
+lToken :: Parser MToken
+lToken = do 
+    mp <- optional lPreBody
+    case mp of 
+        Just p -> pure p 
+        Nothing -> vsc >> choice [ lNumber, lString, lDelim, lOp, lIden ]
 
+lMica :: Parser [MToken]
+lMica = do 
+    hdr <- optional lPreHeader
+    toks <- case hdr of 
+        Just h -> ((h:) <$> many lToken) 
+        Nothing -> many lToken 
+    vsc >> eof
+    pure toks
+    
 type Grouper = Parsec Void [MToken]
 
 isDelim :: Char -> MToken -> Bool
-isDelim d (TDelim _ x) = x == d
+isDelim d (LDelim _ x) = x == d
 isDelim _ _ = False
 
 gDelim :: Char -> Grouper MToken
 gDelim d = satisfy (isDelim d) <?> ("delimiter " ++ [d])
 
 gParen :: Grouper LexTree
-gParen = TParen <$> between (gDelim '(') (gDelim ')') gNodes
+gParen = LParen <$> between (gDelim '(') (gDelim ')') gNodes
 
 gCurly :: Grouper LexTree
-gCurly = TCurly <$> between (gDelim '{') (gDelim '}') gBlock
+gCurly = LCurly <$> between (gDelim '{') (gDelim '}') gBlock
 
 gBrack :: Grouper LexTree
-gBrack = TBrack <$> between (gDelim '[') (gDelim ']') gNodes
+gBrack = LBrack <$> between (gDelim '[') (gDelim ']') gNodes
 
 notDelim :: MToken -> Bool
-notDelim (TDelim _ _) = False
+notDelim (LDelim _ _) = False
 notDelim _          = True
 
 gNotDelim :: Grouper MToken
 gNotDelim = satisfy notDelim <?> ("not delimiter")
 
 gLeaf :: Grouper LexTree 
-gLeaf = TLeaf <$> gNotDelim 
+gLeaf = LLeaf <$> gNotDelim 
 
 gNode :: Grouper LexTree
 gNode = choice [
@@ -105,7 +132,7 @@ gNodes :: Grouper [LexTree]
 gNodes = many gNode
 
 gBlock:: Grouper [LexTree]
-gBlock = (TBranch <$> gNodes) `sepEndBy` (gDelim ';')
+gBlock = (LBranch <$> gNodes) `sepEndBy` (gDelim ';')
 
 gMica :: Grouper [LexTree]
 gMica = gBlock <* eof
@@ -119,3 +146,4 @@ type GrouperError = ParseErrorBundle [MToken] Void
 
 runGrouper :: String -> [MToken] -> Either GrouperError [LexTree]
 runGrouper = runParser gMica
+ 

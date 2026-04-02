@@ -54,6 +54,14 @@ extra-doc-files:    CHANGELOG.md
 common warnings
     ghc-options: -Wall
 
+test-suite mica-test
+    type:                exitcode-stdio-1.0
+    hs-source-dirs:      test, app
+    main-is:             Test.hs
+    other-modules: Mica.Lexer, Mica.Parser, Mica.Type, TestLexer
+    build-depends: base ^>=4.18.2.1, megaparsec, text, containers
+    default-language:    Haskell2010
+
 executable Mica
     -- Import common warning flags.
     import:           warnings
@@ -68,9 +76,9 @@ executable Mica
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.18.2.1, megaparsec, text
+    build-depends: base ^>=4.18.2.1, megaparsec, text, containers
 
-    other-modules: Mica.Lexer, Mica.Parser
+    other-modules: Mica.Lexer, Mica.Parser, Mica.Type
 
     -- Directories containing source files.
     hs-source-dirs:   app
