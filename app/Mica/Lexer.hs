@@ -1,49 +1,44 @@
 {-# LANGUAGE OverloadedStrings #-}
--- {-# LANGUAGE FlexibleInstances #-}
--- {-# LANGUAGE TypeFamilies      #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DeriveFunctor #-}
 
 module Mica.Lexer where
 
-import Data.Text
+import Data.Text (Text)
+import Data.List
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Data.Void
--- import qualified Data.List.NonEmpty as NE
+import qualified Data.List.NonEmpty as NE
+import Control.Monad
 
-data MToken = 
-    LId SourcePos String |      -- Identifier
-    LInt SourcePos Integer |    -- Integer
-    LDbl SourcePos Double |     -- Floating Point Number
-    LStr SourcePos String |     -- UTF8 String Literal
-    LOp SourcePos String |      -- Any combo (sans ws) of !#$%&*+./<=>?@\^|-~
-    LDelim SourcePos Char |     -- (){}[];
-    LPre SourcePos String
-    deriving (Show, Eq, Ord)
+type SP = SourcePos 
 
-data LexTree =
-    LParen [LexTree] |          -- Everything inside ( )
-    LCurly [LexTree] |          -- Everything inside { }
-    LBrack [LexTree] |          -- Everything inside [ ]
-    LBranch [LexTree] |         -- White space and ';'
-    LLeaf MToken
-    deriving (Show, Eq)
+data MToken p = 
+    LId p String |              -- Identifier
+    LInt p Integer |            -- Integer
+    LDbl p Double |             -- Floating Point Number
+    LStr p String |             -- UTF8 String Literal
+    LOp p String |              -- Any combo (sans ws) of !#$%&*+./<=>?@\^|-~
+    LDelim p Char |             -- (){}[];
+    LPre p String
+    deriving (Show, Eq, Ord, Functor)
     
 type Parser = Parsec Void Text
+isNextEnd = lookAhead (void eol) <|> lookAhead eof
 
-isNextEnd = lookAhead (eol >> pure ()) <|> lookAhead eof
-
-lPre :: Parser MToken
+lPre :: Parser (MToken SP)
 lPre = do 
     pos <- getSourcePos 
     char '#'
     LPre pos <$> manyTill anySingle isNextEnd
 
-lPreHeader :: Parser MToken 
-lPreHeader = try $ vsc >> lPre
+lPreHead :: Parser (MToken SP)
+lPreHead = try $ vsc *> lPre
 
-lPreBody :: Parser MToken 
-lPreBody = try $ eol >> vsc >> lPre
+lPreBody :: Parser (MToken SP)
+lPreBody = try $ eol *> vsc *> lPre
 
 vsc :: Parser () 
 vsc = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/") 
@@ -51,99 +46,45 @@ vsc = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/")
 hsc :: Parser ()
 hsc = L.space hspace1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/") 
 
-lexeme :: (SourcePos -> a -> MToken) -> Parser a -> Parser MToken
+lexeme :: (SP -> a -> (MToken SP)) -> Parser a -> Parser (MToken SP)
 lexeme con par = (con <$> getSourcePos <*> par) <* hsc
 
-lDouble :: Parser MToken
-lDouble = lexeme LDbl L.float
+lDbl :: Parser (MToken SP)
+lDbl = lexeme LDbl L.float
 
-lInt :: Parser MToken
+lInt :: Parser (MToken SP)
 lInt = lexeme LInt L.decimal
 
-lString :: Parser MToken
-lString = lexeme LStr (char '"' *> manyTill L.charLiteral (char '"'))
-
-lDelim :: Parser MToken
+lStr :: Parser (MToken SP)
+lStr = lexeme LStr $ 
+    char '"' *> 
+    (many $ satisfy (\c -> c /= '\n' && c /= '"')) <* 
+    char '"'
+    
+lDelim :: Parser (MToken SP)
 lDelim = lexeme LDelim (oneOf ("(){}[];"::String))
 
-lOp :: Parser MToken
+lOp :: Parser (MToken SP)
 lOp = lexeme LOp (some $ oneOf ("~!@#$%^&*-+=|\\:?/.>,<"::String))
 
-lIden :: Parser MToken
-lIden = lexeme LId ((:) <$> 
+lId :: Parser (MToken SP)
+lId = lexeme LId ((:) <$> 
     (letterChar <|> char '_') <*> 
     many (alphaNumChar <|> char '_'))
 
-lNumber :: Parser MToken
-lNumber = try lDouble <|> lInt
+lNumber :: Parser (MToken SP)
+lNumber = try lDbl <|> lInt
 
-lToken :: Parser MToken
-lToken = do 
-    mp <- optional lPreBody
-    case mp of 
-        Just p -> pure p 
-        Nothing -> vsc >> choice [ lNumber, lString, lDelim, lOp, lIden ]
+lToken :: Parser (MToken SP)
+lToken = lPreBody <|> (vsc >> choice [
+    lNumber, 
+    lStr, 
+    lDelim, 
+    lOp,
+    lId])
 
-lMica :: Parser [MToken]
-lMica = do 
-    hdr <- optional lPreHeader
-    toks <- case hdr of 
-        Just h -> ((h:) <$> many lToken) 
-        Nothing -> many lToken 
-    vsc >> eof
-    pure toks
-    
-type Grouper = Parsec Void [MToken]
-
-isDelim :: Char -> MToken -> Bool
-isDelim d (LDelim _ x) = x == d
-isDelim _ _ = False
-
-gDelim :: Char -> Grouper MToken
-gDelim d = satisfy (isDelim d) <?> ("delimiter " ++ [d])
-
-gParen :: Grouper LexTree
-gParen = LParen <$> between (gDelim '(') (gDelim ')') gNodes
-
-gCurly :: Grouper LexTree
-gCurly = LCurly <$> between (gDelim '{') (gDelim '}') gBlock
-
-gBrack :: Grouper LexTree
-gBrack = LBrack <$> between (gDelim '[') (gDelim ']') gNodes
-
-notDelim :: MToken -> Bool
-notDelim (LDelim _ _) = False
-notDelim _          = True
-
-gNotDelim :: Grouper MToken
-gNotDelim = satisfy notDelim <?> ("not delimiter")
-
-gLeaf :: Grouper LexTree 
-gLeaf = LLeaf <$> gNotDelim 
-
-gNode :: Grouper LexTree
-gNode = choice [
-    gParen,
-    gCurly,
-    gBrack,
-    gLeaf ]
-
-gNodes :: Grouper [LexTree]
-gNodes = many gNode
-
-gBlock:: Grouper [LexTree]
-gBlock = (LBranch <$> gNodes) `sepEndBy` (gDelim ';')
-
-gMica :: Grouper [LexTree]
-gMica = gBlock <* eof
-
-type ParserError = ParseErrorBundle Text Void
-
-runLexer :: String -> Text -> Either ParserError [MToken]
-runLexer = runParser lMica
-
-type GrouperError = ParseErrorBundle [MToken] Void
-
-runGrouper :: String -> [MToken] -> Either GrouperError [LexTree]
-runGrouper = runParser gMica
- 
+lMica :: Parser [MToken SP]
+lMica = 
+    ((:) <$> lPreHead <*> many lToken) <|> (many lToken) <*
+    vsc <*
+    eof

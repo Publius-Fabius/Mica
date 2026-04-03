@@ -1,65 +1,51 @@
 module Mica.Type where 
 
+import Text.Megaparsec 
+
+type SP = SourcePos
+
 -- World's best systems programming language. 
 -- The one true spiritual successor to C.
 
-data Region = 
-    Global |                            --- Global "malloced" memory
-    Local |                             --- Thread local memory
-    Fenced |                            --- Safe mprotected memory
-    Stack                               --- Stack based memory
-    deriving (Show, Eq)
-    
-type TVar = Either String Expr          --- Either Var or Type
-
 data Expr =
-    TyLam Region [Expr] Expr Expr |     --- Region, Captures, Signature
-    TyPtr Region TVar |                 --- Pointer Kind
-    TyArr Region Expr |                 --- Array Type
-    Lam Region Expr Expr FunBlock |     --- loc, captures, args, body
-    Iden String |                       --- Identifier
-    Bin String Expr Expr |              --- Binary Op ie. (+-%^&)
-    Una String Expr |                   --- Unary Op ie. (!*&)
-    Tri Expr Expr Expr |                --- Trinary Op ie. (x?y:z)
-    LitInt Integer |                    --- Literal Integer
-    LitDbl Double |                     --- Literal Double
-    LitStr String                       --- Literal String
+    TVar SP String |                    --- Type Variable
+    TLam SP Expr Expr Expr |            --- TLambda: Region, Access, Type
+    TPtr SP Expr Expr Expr |            --- TPointer: Region, Access, Type
+    TArr SP Expr Expr |                 --- TArray: Region, Access, Type
+    Lam SP Expr Expr Expr ExprStmt |    --- Lambda: Region, Access, Args, Body
+    Iden SP String |                    --- Identifier
+    Bin SP String Expr Expr |           --- Binary Op ie. (+-%^&)
+    Una SP String Expr |                --- Unary Op ie. (!*&)
+    Tri SP Expr Expr Expr |             --- Trinary Op ie. (x?y:z)
+    IntLit SP Integer |                 --- Literal Integer
+    DblLit SP Double |                  --- Literal Double
+    StrLit SP String                    --- Literal String
     deriving (Show, Eq)
 
-type CaseStmt = (String, Expr, BlockStmt)
+type CaseStmt = (String, Expr, ExprStmt)
 
 data BlockStmt =
-    IfThen Expr BlockStmt |             --- If Then 
-    Else Expr |                         --- Else
-    While Expr BlockStmt |              --- While 
-    For BlockStmt Expr BlockStmt |      --- For 
-    Return (Maybe Expr) |               --- Return
-    Continue |                          --- Continue
-    Break |                             --- Break
-    Assign Expr Expr |                  --- Assign Register|Ptr
-    Let String Expr |                   --- Immutable Value
-    Match Expr [CaseStmt] |             --- Pattern Matching
-    Register String Expr                --- Mutable Primitive
+    If SP Expr ExprStmt |               --- If Then 
+    Else SP ExprStmt |                  --- Else
+    While SP Expr ExprStmt |            --- While 
+    For SP BlockStmt Expr BlockStmt |   --- For 
+    Ret SP (Maybe Expr) |               --- Return
+    Cont SP |                           --- Continue
+    Bre SP |                            --- Break
+    Ass SP Expr Expr |                  --- Assign Register|Ptr
+    Let SP String Expr |                --- Immutable Value
+    Mat SP Expr [CaseStmt] |            --- Pattern Matching
+    Reg SP String Expr                  --- Mutable Primitive
     deriving (Show, Eq)
 
-type FunBlock = Either [BlockStmt] Expr
-
-data Spec = 
-    ThreadLocal |
-    Static |
-    Extern
-    deriving (Show, Eq)
-
-type Constr = (String, Expr)
-type Memb = (String, Expr)
+type ExprStmt = Either [BlockStmt] Expr
 
 data FileStmt =
-    Fun String Expr FunBlock |         --- Function Stmt
-    Jdg String Expr |                   --- Type Judgement
-    Dat String [Constr] |               --- Type Union
-    Stru String [Memb] |                --- Classic 'C' Struct
-    Decl Spec String Expr |             --- Declare file level symbol
-    Def String Expr |                   --- Assign value to symbol
-    Import String                       --- Import Header
+    Fun SP String Expr ExprStmt |        --- Function Stmt
+    Jdg SP String Expr |                --- Type Judgement
+    Dat SP String [(String, Expr)] |    --- Tagged Type Union
+    Stru SP String [(String, Expr)] |   --- Classic 'C' Struct
+    Dec SP Expr String Expr |           --- Declare: Specifiers, Name, Type
+    Def SP String Expr |                --- Define: Name, Value
+    Imp SP String                       --- Import Header
     deriving (Show, Eq)
-
