@@ -12,7 +12,6 @@ import Text.Megaparsec
 
 ip = initialPos ""
 
-
 strip p = (const () <$>) <$> p
 strips p = map (const () <$>) <$> p
 
@@ -49,7 +48,7 @@ lexerTest1 = describe "Lexer (Test 1)" $ do
         strip result `shouldParse` LPre () "hi" 
     it "doesn't accept preprocessor directives in the body without a newline" $
         parse lPreBody "" `shouldFailOn` " /* \n */ \n #hi"
-
+    
 lexerTest2 :: Spec 
 lexerTest2 = describe "Lexer (Test 2)" $ do 
     it "can lex multiple idens in a row" $
@@ -107,6 +106,9 @@ lexerTest2 = describe "Lexer (Test 2)" $ do
     it "properly lexes a paren block" $ 
         let result = parse lMica "" "( x )" in 
         strips result `shouldParse` [LDelim () '(', LId () "x", LDelim () ')']
-        
+    it "ignores white space at the end of the file" $ 
+        let result = parse lMica "" "\n#hi\n  \n" in
+        strips result `shouldParse` [LPre () "hi"] 
+
 test :: IO ()
 test = hspec $ lexerTest1 >> lexerTest2

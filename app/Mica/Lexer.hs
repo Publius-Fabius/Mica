@@ -25,66 +25,66 @@ data MToken p =
     LPre p String
     deriving (Show, Eq, Ord, Functor)
     
-type Parser = Parsec Void Text
+type Lexer = Parsec Void Text
 isNextEnd = lookAhead (void eol) <|> lookAhead eof
 
-lPre :: Parser (MToken SP)
+lPre :: Lexer (MToken SP)
 lPre = do 
     pos <- getSourcePos 
     char '#'
     LPre pos <$> manyTill anySingle isNextEnd
 
-lPreHead :: Parser (MToken SP)
+lPreHead :: Lexer (MToken SP)
 lPreHead = try $ vsc *> lPre
 
-lPreBody :: Parser (MToken SP)
+lPreBody :: Lexer (MToken SP)
 lPreBody = try $ eol *> vsc *> lPre
 
-vsc :: Parser () 
+vsc :: Lexer () 
 vsc = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/") 
 
-hsc :: Parser ()
+hsc :: Lexer ()
 hsc = L.space hspace1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/") 
 
-lexeme :: (SP -> a -> (MToken SP)) -> Parser a -> Parser (MToken SP)
+lexeme :: (SP -> a -> MToken SP) -> Lexer a -> Lexer (MToken SP)
 lexeme con par = (con <$> getSourcePos <*> par) <* hsc
 
-lDbl :: Parser (MToken SP)
+lDbl :: Lexer (MToken SP)
 lDbl = lexeme LDbl L.float
 
-lInt :: Parser (MToken SP)
+lInt :: Lexer (MToken SP)
 lInt = lexeme LInt L.decimal
 
-lStr :: Parser (MToken SP)
+lStr :: Lexer (MToken SP)
 lStr = lexeme LStr $ 
     char '"' *> 
-    (many $ satisfy (\c -> c /= '\n' && c /= '"')) <* 
+    many (satisfy (\c -> c /= '\n' && c /= '"')) <* 
     char '"'
     
-lDelim :: Parser (MToken SP)
+lDelim :: Lexer (MToken SP)
 lDelim = lexeme LDelim (oneOf ("(){}[];"::String))
 
-lOp :: Parser (MToken SP)
+lOp :: Lexer (MToken SP)
 lOp = lexeme LOp (some $ oneOf ("~!@#$%^&*-+=|\\:?/.>,<"::String))
 
-lId :: Parser (MToken SP)
+lId :: Lexer (MToken SP)
 lId = lexeme LId ((:) <$> 
     (letterChar <|> char '_') <*> 
     many (alphaNumChar <|> char '_'))
 
-lNumber :: Parser (MToken SP)
+lNumber :: Lexer (MToken SP)
 lNumber = try lDbl <|> lInt
 
-lToken :: Parser (MToken SP)
-lToken = lPreBody <|> (vsc >> choice [
+lToken :: Lexer (MToken SP)
+lToken = try $ lPreBody <|> (vsc >> choice [
     lNumber, 
     lStr, 
     lDelim, 
     lOp,
     lId])
 
-lMica :: Parser [MToken SP]
+lMica :: Lexer [MToken SP]
 lMica = 
-    ((:) <$> lPreHead <*> many lToken) <|> (many lToken) <*
+    ((:) <$> lPreHead <*> many lToken) <|> many lToken <*
     vsc <*
     eof

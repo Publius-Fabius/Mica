@@ -1,123 +1,303 @@
-module Mica.Parser where
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 
-import Mica.Lexer 
+module Mica.Parser where 
+import Mica.Grouper
+import Mica.Lexer
 import Mica.Type
+import Text.Megaparsec
+import Data.Void
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
 
--- type ParserF a = Either String a
+type Parser = Parsec Void [LexTree SP]
 
--- err :: String -> ParserF a
--- err = Left
+-- isLeaf :: LexTree SP -> Bool 
+-- isLeaf (LLeaf _) = True 
+-- isLeaf _ = False 
 
--- parse :: [LexTree] -> ParserF [FileStmt]
--- parse [] = pure []
--- parse ((LBranch stmt) : bs) = (:) <$> parseStmt stmt <*> parse bs
--- parse _ = err "No statement found"  -- TODO: report neighbors sourcepos
+-- -- | Parses Int, Dbl, Str, Pre 
+-- pPrimary :: Parser (Exp SP)
+-- pPrimary = try $ anySingle >>= \case 
+--     LLeaf (LId p s) -> pure $ Iden p s  
+--     LLeaf (LInt p i) -> pure $ IntLit p i  
+--     LLeaf (LDbl p d) -> pure $ DblLit p d
+--     LLeaf (LStr p s) -> pure $ StrLit p s
+--     _ -> fail "expected a primary node"
 
--- -- dec optional_spec iden ':' type ;
--- -- def iden = ... ; 
--- parseStmt :: [LexTree] -> ParserF FileStmt 
--- parseStmt (LLeaf (LId _ "fun") : rest) = parseFun rest
--- parseStmt (LLeaf (LId _ "jdg") : rest) = parseJdg rest
--- parseStmt (LLeaf (LId _ "data") : rest) = parseDat rest
--- parseStmt (LLeaf (LId _ "struct") : rest) = parseStru rest
--- parseStmt (LLeaf (LId _ "declare") : rest) = parseDec rest
--- parseStmt (LLeaf (LId _ "define") : rest) = parseDef rest
--- parseStmt (LLeaf (LId _ "import") : rest) = parseImport rest
--- parseStmt (LLeaf (LId _ "extern") : rest) = parseExtern rest
--- parseStmt _ = err "Malformed statement"
+-- pRawIden :: Parser String 
+-- pRawIden = try $ anySingle >>= \case  
+--     LLeaf (LId p s) -> pure s 
+--     _ -> fail "expected a raw identifier"
 
--- -- fun iden(args) expr|bodystmt ;
--- parseFun :: [LexTree] -> ParserF FileStmt 
--- parseFun (LLeaf (LId _ i) : LLeaf (LOp _ "=") : (LParen args) : bdy ) =
---     Fun i <$> (parseExpr args) <*> (parseFunBlock bdy)
--- parseFun _ = err "Malformed function statement"
+-- pStrLit :: Parser String 
+-- pStrLit = try $ anySingle >>= \case  
+--     LLeaf (LStr p s) -> pure s 
+--     _ -> fail "expected a raw string literal identifier"
+    
+-- recurse :: [LexTree SP] -> Parser a -> Parser a 
+-- recurse ts p = case parse p "" ts of 
+--     Right a -> pure a 
+--     Left err -> parseError (NE.head (bundleErrors err))
 
--- -- expr | { block }
--- parseFunBlock :: [LexTree] -> ParserF FunBlock 
--- parseFunBlock ((LCurly block) : []) = Left <$> parseBlock block 
--- parseFunBlock expr = Right <$> parseExpr expr
+-- isBranch :: LexTree a -> Bool
+-- isBranch (LBranch _) = True 
+-- isBranch _ = False 
 
--- -- x = 1; y = 2;
--- parseBlock :: [LexTree] -> ParserF [BlockStmt] 
--- parseBlock (a : bs) = (:) <$> parseBlockStmt a <*> parseBlock bs 
--- parseBlock [] = pure []
+-- pBranch :: Parser a -> Parser a 
+-- pBranch p = try $ anySingle >>= \case 
+--     LBranch as -> recurse as p 
+--     _ -> fail "expected a branch"
 
--- parseBlockStmt :: LexTree -> ParserF BlockStmt 
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "if") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "else") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "while") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "for") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "return") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "continue") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "break") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "match") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "set") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "let") : rs)) = undefined
--- -- parseBlockStmt (LBranch (LLeaf (LId _ "reg") : rs)) = undefined
--- parseBlockStmt _ = err "Malformed block statement"
+-- pParen :: Parser a -> Parser a 
+-- pParen p = try $ anySingle >>= \case 
+--     LParen as -> recurse as p
+--     _ -> fail "expected a parentheses"
 
--- -- jdg iden ':' type ;
--- parseJdg :: [LexTree] -> ParserF FileStmt 
--- parseJdg (LLeaf (LId _ i) : LLeaf (LOp _ ":") : ty) = 
---     Jdg i <$> parseExpr ty 
--- parseJdg _ = err "Malformed judgement"
+-- isCurly :: LexTree a -> Bool 
+-- isCurly (LCurly _) = True 
+-- isCurly _ = False 
 
--- -- data iden { conA : ... ; conB : ...; };
--- parseDat :: [LexTree] -> ParserF FileStmt 
--- parseDat (LLeaf (LId _ i) : LCurly cs : []) = Dat i <$> parseCons cs 
--- parseDat _ = err "Malformed data"
+-- pCurly :: Parser a -> Parser a 
+-- pCurly p = try $ anySingle >>= \case 
+--     LCurly as -> recurse as p 
+--     _ -> fail "expected a curly brackets"
 
--- parseCons :: [LexTree] -> ParserF [Constr] 
--- parseCons (LBranch (LLeaf (LId _ i) : LLeaf (LOp _ ":") : ty) : cs) = 
---     (:) . (\x -> (i, x)) <$> parseExpr ty <*> parseCons cs 
--- parseCons [] = pure []
--- parseCons _ = err "Malformed constructor"
+-- isBrack :: LexTree a -> Bool 
+-- isBrack (LBrack _) = True 
+-- isBrack _ = False 
 
--- -- struct iden { memA : ... ; memB : ...; };
--- parseStru :: [LexTree] -> ParserF FileStmt 
--- parseStru (LLeaf (LId _ i) : LCurly cs : []) = Stru i <$> parseCons cs 
--- parseStru _ = err "Malformed data"
+-- pBrack :: Parser a -> Parser a 
+-- pBrack p = try $ anySingle >>= \case 
+--     LBrack as -> recurse as p
+--     _ -> fail "expected a square brackets"
 
--- parseDef :: [LexTree] -> ParserF FileStmt 
--- parseDef = undefined
+-- pFileStmt :: Parser (FileStmt SP)
+-- pFileStmt = try $ anySingle >>= \ case
+--     LBranch (LLeaf (LId p "fun") : ns) -> recurse ns (pFun p) 
+--     LBranch (LLeaf (LId p "jdg") : ns) -> recurse ns (pJdg p)
+--     LBranch (LLeaf (LId p "data") : ns) -> recurse ns (pData p)
+--     LBranch (LLeaf (LId p "struct") : ns) -> recurse ns (pStruct p)
+--     LBranch (LLeaf (LId p "dec") : ns) -> recurse ns (pDec p)
+--     LBranch (LLeaf (LId p "def") : ns) -> recurse ns (pDef p)
+--     LBranch (LLeaf (LId p "import") : ns) -> recurse ns (pImport p)
+--     _ -> fail "expected a file statement"
 
--- parseDec :: [LexTree] -> ParserF FileStmt 
--- parseDec = undefined 
+-- pExpectedOp :: String -> Parser SP 
+-- pExpectedOp name = try $ anySingle >>= \case
+--     LLeaf (LOp p s) -> if name == s 
+--         then pure p 
+--         else fail $ "expected " ++ name ++ ", instead got " ++ s
+--     _ -> fail $ "expected operator:" ++ name
 
--- parseImport :: [LexTree] -> ParserF FileStmt 
--- parseImport = undefined 
+-- pExpectedIden :: String -> Parser SP 
+-- pExpectedIden iden = try $ anySingle >>= \case
+--     LLeaf (LId p i) -> if iden == i
+--         then pure p 
+--         else fail $ "expected " ++ iden ++ ", instead got " ++ i
+--     _ -> fail $ "expected operator:" ++ iden
 
--- parseExtern :: [LexTree] -> ParserF FileStmt 
--- parseExtern = undefined 
+-- pFun :: SP -> Parser (FileStmt SP)
+-- pFun p = 
+--     Fun p <$> pRawIden <*> (pParen pExp <* pExpectedOp "=") <*> pExpStmt 
 
--- parseToken :: MToken -> ParserF Expr 
--- parseToken (LId _ i) = pure $ Iden i
--- parseToken (LDbl _ n) = pure $ LitDbl n
--- parseToken (LInt _ n) = pure $ LitInt n
--- parseToken (LStr _ s) = pure $ LitStr s
--- parseToken _ = err "Could not parse token"
+-- pJdg :: SP -> Parser (FileStmt SP) 
+-- pJdg p = Jdg p <$> (pRawIden <* pExpectedOp ":") <*> pExp 
+
+-- pMember :: Parser (String, Exp SP)
+-- pMember = (,) <$> (pRawIden <* pExpectedOp ":") <*> pExp 
+
+-- pData :: SP -> Parser (FileStmt SP)
+-- pData p = 
+--     Dat p <$> pRawIden <*> pParen pExp <*> pCurly (many pMember) 
+     
+-- pStruct :: SP -> Parser (FileStmt SP)
+-- pStruct p = 
+--     Stru p <$> pRawIden <*> pParen pExp <*> pCurly (many pMember) 
+
+-- pDec :: SP -> Parser (FileStmt SP)
+-- pDec p = Dec p <$> 
+--     optional (pParen pExp) <*> (pRawIden <* pExpectedOp "=") <*> pExp 
+
+-- pDef :: SP -> Parser (FileStmt SP)
+-- pDef p = Def p <$> pRawIden <*> pExp 
+
+-- pImport :: SP -> Parser (FileStmt SP)
+-- pImport p = Imp p <$> pStrLit 
+
+-- pBlockStmt :: Parser (BlockStmt SP) 
+-- pBlockStmt = try $ anySingle >>= \case 
+--     LBranch (LLeaf (LId p "if") : ns) -> recurse ns (pIf p) 
+--     LBranch (LLeaf (LId p "else") : ns) -> recurse ns (pElse p)
+--     LBranch (LLeaf (LId p "while") : ns) -> recurse ns (pWhile p)
+--     LBranch (LLeaf (LId p "do") : ns) -> recurse ns (pDoWhile p)
+--     LBranch (LLeaf (LId p "for") : ns) -> recurse ns (pFor p)
+--     LBranch (LLeaf (LId p "return") : ns) -> recurse ns (pRet p)
+--     LBranch (LLeaf (LId p "break") : ns) -> recurse ns (pBrk p) 
+--     LBranch (LLeaf (LId p "let") : ns) -> recurse ns (pLet p)
+--     LBranch (LLeaf (LId p "match") : ns) -> recurse ns (pMat p)
+--     LBranch ns -> recurse ns pSet
+--     _ -> fail "expected a block statement"
+
+-- pIf :: SP -> Parser (BlockStmt SP) 
+-- pIf p = If p <$> pParen pExp <*> pExpStmt 
+    
+-- pElse :: SP -> Parser (BlockStmt SP) 
+-- pElse p = Else p <$> pExpStmt
+
+-- pWhile :: SP -> Parser (BlockStmt SP) 
+-- pWhile p = While p <$> pParen pExp <*> pExpStmt  
+
+-- pDoWhile :: SP -> Parser (BlockStmt SP) 
+-- pDoWhile p =  
+--     DoWhile p <$> pExpStmt <*> (pExpectedIden "while" *> pParen pExp)
+
+-- pFor :: SP -> Parser (BlockStmt SP) 
+-- pFor p = For p <$> pParen pExp <*> pExpStmt 
+
+-- pRet :: SP -> Parser (BlockStmt SP) 
+-- pRet p = Ret p <$> optional pExp  
+
+-- pBrk :: SP -> Parser (BlockStmt SP) 
+-- pBrk = pure . Brk 
+
+-- pSet :: Parser (BlockStmt SP) 
+-- pSet = Set <$> pExp
+
+-- pLet :: SP -> Parser (BlockStmt SP) 
+-- pLet p = Let p <$> (pRawIden <* pExpectedOp "=") <*> pExp  
+
+-- pMat :: SP -> Parser (BlockStmt SP) 
+-- pMat p = Mat p <$> pParen pExp <*> pCurly (many pCase) 
+
+-- pCase :: Parser (String, Exp SP, ExpStmt SP)
+-- pCase = (,,) <$> pRawIden <*> pParen pExp <*> pExpStmt 
+
+-- pExpStmt :: Parser (ExpStmt SP)
+-- pExpStmt = 
+--     try (ExpStmtBlock <$> pCurly (many pBlockStmt)) <|>  
+--     try (ExpStmtExp <$> pExp)
+
+-- pExp :: Parser (Exp SP)
+-- pExp = undefined 
+
+-- pAtom :: Parser (Exp SP)
+-- pAtom = try $ anySingle >>= \case 
+--     LParen a -> recurse a pExp 
+--     LBrack a -> Brack <$> recurse a pExp
+--     LLeaf (LId p "lam") -> pLam p 
+--     LLeaf (LOp p op) -> Una p op <$> pAtom
+--     LLeaf (LId p s) -> pure $ Iden p s  
+--     LLeaf (LInt p i) -> pure $ IntLit p i  
+--     LLeaf (LDbl p d) -> pure $ DblLit p d
+--     LLeaf (LStr p s) -> pure $ StrLit p s
+--     LBranch _ -> fail "expected an atom, instead got a branch"
+--     LCurly _ -> fail "expected an atom, instead got a curly brack"
+--     LLeaf t -> fail $ "expected an atom, instead got " ++ prettyMToken t
+
+-- pLam :: SP -> Parser (Exp SP) 
+-- pLam = undefined 
+
+-- pExpAccum :: Exp a -> Parser a 
+-- pExpAccum lx = try $ anySingle >>= \case 
+--     LParen as -> recurse as (pExpAccum lx)
+--     _ -> undefined
+    -- LLeaf (LOp p op) -> do 
+    --     rx <- pAtom
+    --     ex <- insertLR lx op 
+
+-- insertAppLR :: Exp a -> Exp a -> Parser (Exp a)
+-- insertAppLR lx rx = try $ do 
+--     (prec, _) <- opInfo " "
+--     ex <- insertLR lx (Op ) prec rx
+--     pExpAccum ex
+
+-- getSP :: LexTree SP -> SP 
+-- getSP (LParen (a:_)) = getSP a 
+-- getSP (LCurly (a:_)) = getSP a 
+-- getSP (LBrack (a:_)) = getSP a 
+-- getSP (LBranch (a:_)) = getSP a 
+-- getSP (LLeaf token) = mTokenPos token
+-- getSP _ = error "empty "
+
+-- insertLR :: Expr -> String -> Int -> Expr -> ParserF Expr 
+-- insertLR lx@(Bin lop ll lr) rop rprec rx = do 
+--     (lprec, _) <- getOpInfo lop 
+--     if lprec < rprec
+--         then Bin lop ll <$> insertLR lr rop rprec rx
+--         else pure $ Bin rop lx rx 
+-- insertLR lx@(Una lop lr) rop rprec rx = do 
+--     (lprec, _) <- getOpInfo lop
+--     if lprec < rprec 
+--         then Una lop <$> insertLR lr rop rprec rx 
+--         else pure $ Bin rop lx rx 
+-- insertLR lx rop _ rx = pure $ Bin rop lx rx
+
+-- parseExprAccum :: (Expr, [LexTree]) -> ParserF (Expr, [LexTree]) 
+-- parseExprAccum (lx, (LLeaf (LOp _ op1) : l2@(LLeaf (LOp _ op2)) : rs)) = do 
+--     (prec, ty) <- getOpInfo op1 
+--     case ty of 
+--         "U" -> do 
+--             (rx, rrs) <- parseAtomU (Una op1) (l2:rs)
+--             insertAppAccum lx rrs rx 
+--         "B" -> do
+--             (rx, rrs) <- parseAtomU (Una op2) rs
+--             ex <- insertLR lx op1 prec rx
+--             parseExprAccum (ex, rrs)
+--         _ -> err $ "Operator must be unary or binary"
+-- parseExprAccum (lx, (LLeaf (LOp _ op) : rs)) = do 
+--     (prec, ty) <- getOpInfo op 
+--     case ty of 
+--         "U" -> do 
+--             (rx, rrs) <- parseAtomU (Una op) rs 
+--             insertAppAccum lx rrs rx 
+--         "B" -> do 
+--             (rx, rrs) <- parseAtom rs 
+--             ex <- insertLR lx op prec rx 
+--             parseExprAccum (ex, rrs)
+--         _ -> err $ "Operator must be unary or binary"
+-- parseExprAccum (lx, (LLeaf tok) : bs) = 
+--     parseToken tok >>= insertAppAccum lx bs
+-- parseExprAccum (lx, (LBrack as) : bs) =  
+--     parseExpr as >>= insertAppAccum lx bs
+-- parseExprAccum (lx, (LBranch as) : bs) = 
+--     parseExpr as >>= insertAppAccum lx bs
+-- parseExprAccum (lx, (LParen as) : bs) = 
+--     parseExpr as >>= insertAppAccum lx bs
+-- parseExprAccum (lx, a) = pure (lx, a)
+
+
+-- prettyLexTree :: LexTree a -> String 
+-- prettyLexTree (LParen ts) = "(" ++ unwords (map prettyLexTree ts) ++ ")"
+-- prettyLexTree (LCurly ts) = "{" ++ unwords (map prettyLexTree ts) ++ "}"
+-- prettyLexTree (LBrack ts) = "[" ++ unwords (map prettyLexTree ts) ++ "]"
+-- prettyLexTree (LBranch ts) = unwords (map prettyLexTree ts) ++ ";"
+-- prettyLexTree (LLeaf l) = prettyMToken l
+
+-- lexTreePos :: LexTree SP -> SP
+-- lexTreePos (LParen (a:_)) = lexTreePos a
+-- lexTreePos (LCurly (a:_)) = lexTreePos a
+-- lexTreePos (LBrack (a:_)) = lexTreePos a
+-- lexTreePos (LBranch (a:_)) = lexTreePos a
+-- lexTreePos (LLeaf l) = mTokenPos l
+
+-- instance VisualStream [LexTree SP] where 
+--      showTokens _ = unwords . map prettyLexTree . NE.toList 
+    
+-- instance TraversableStream [LexTree SP] where 
+--     reachOffsetNoLine o pst = 
+--         let offsetDiff = o - pstateOffset pst in
+--         let tokensLeft = drop offsetDiff (pstateInput pst) in
+--         case tokensLeft of
+--             []    -> pst
+--             (t:_) -> pst { 
+--                 pstateOffset = o,
+--                 pstateSourcePos = lexTreePos t }
 
 -- parseExpr :: [LexTree] -> ParserF Expr 
 -- parseExpr as = fst <$> (parseAtom as >>= parseExprAccum)
 
--- parseAtom :: [LexTree] -> ParserF (Expr, [LexTree]) 
--- parseAtom (LParen as : bs) = (\x -> (x, bs)) <$> parseExpr as 
--- parseAtom (LBrack as : bs) = (\x -> (x, bs)) <$> parseExpr as 
--- parseAtom (LCurly as : bs) = (\x -> (x, bs)) <$> parseExpr as 
--- parseAtom (LBranch as : bs) = (\x -> (x, bs)) <$> parseExpr as 
--- parseAtom (LLeaf (LId _ "lam") : bs) = parseLambda bs
--- parseAtom (LLeaf (LOp _ op) : bs) = parseAtomU (Una op) bs
--- parseAtom (LLeaf t : bs) = (\x -> (x, bs)) <$> parseToken t 
--- parseAtom _ = err "Malformed atom"
-
--- parseAtomU :: (Expr -> Expr) -> [LexTree] -> ParserF (Expr, [LexTree])
--- parseAtomU f (LLeaf (LOp _ op) : bs) = parseAtomU (f . (Una op)) bs
--- parseAtomU f (LLeaf (LId _ "lam") : bs) = 
---     (\(x, ys) -> (f x, ys)) <$> parseLambda bs
--- parseAtomU f (LLeaf t : bs) = (\x -> (f x, bs)) <$> parseToken t 
--- parseAtomU f (LParen as : bs) = (\x -> (f x, bs)) <$> parseExpr as
--- parseAtomU _ _ = err "Malformed atom unary"
 
 -- parseLambda :: [LexTree] -> ParserF (Expr, [LexTree]) 
 -- parseLambda (LLeaf (LId _ region) : LBrack caps : LParen args : body) = 
@@ -197,6 +377,11 @@ import qualified Data.Map as Map
 --         then Una lop <$> insertLR lr rop rprec rx 
 --         else pure $ Bin rop lx rx 
 -- insertLR lx rop _ rx = pure $ Bin rop lx rx
+
+-- opInfo :: String -> Parser (Int, String)
+-- opInfo op = case Map.lookup op precs of 
+--     Just a -> pure a 
+--     Nothing -> fail $ "operator not found " ++ op 
 
 -- precs :: Map.Map String (Int, String) 
 -- precs = Map.fromList precAssocs 

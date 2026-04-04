@@ -1,51 +1,54 @@
+{-# LANGUAGE DeriveFunctor #-}
+
 module Mica.Type where 
-
-import Text.Megaparsec 
-
-type SP = SourcePos
 
 -- World's best systems programming language. 
 -- The one true spiritual successor to C.
 
-data Expr =
-    TVar SP String |                    --- Type Variable
-    TLam SP Expr Expr Expr |            --- TLambda: Region, Access, Type
-    TPtr SP Expr Expr Expr |            --- TPointer: Region, Access, Type
-    TArr SP Expr Expr |                 --- TArray: Region, Access, Type
-    Lam SP Expr Expr Expr ExprStmt |    --- Lambda: Region, Access, Args, Body
-    Iden SP String |                    --- Identifier
-    Bin SP String Expr Expr |           --- Binary Op ie. (+-%^&)
-    Una SP String Expr |                --- Unary Op ie. (!*&)
-    Tri SP Expr Expr Expr |             --- Trinary Op ie. (x?y:z)
-    IntLit SP Integer |                 --- Literal Integer
-    DblLit SP Double |                  --- Literal Double
-    StrLit SP String                    --- Literal String
-    deriving (Show, Eq)
+data Exp a =
+    TVar a String | 
+    TLam a (Exp a) (Exp a) (Exp a) | 
+    TPtr a (Exp a) (Exp a) (Exp a) | 
+    TArr a (Exp a) (Exp a) (Exp a) |    
+    Lam a (Exp a) (Exp a) (Exp a) (ExpStmt a) | 
+    Iden a String |        
+    Bin a String (Exp a) (Exp a) |
+    Una a String (Exp a) | 
+    Tri a (Exp a) (Exp a) (Exp a) | 
+    IntLit a Integer | 
+    DblLit a Double | 
+    StrLit a String |
+    Brack (Exp a) |
+    Curly (Exp a)
+    deriving (Show, Eq, Ord, Functor)
 
-type CaseStmt = (String, Expr, ExprStmt)
+data BlockStmt a =
+    If a (Exp a) (ExpStmt a) | 
+    Else a (ExpStmt a) | 
+    While a (Exp a) (ExpStmt a) | 
+    DoWhile a (ExpStmt a) (Exp a) |
+    For a (Exp a) (ExpStmt a) |
+    Ret a (Maybe (Exp a)) | 
+    Cont a | 
+    Brk a | 
+    Let a String (Exp a) | 
+    Mat a (Exp a) [(String, Exp a, ExpStmt a)] |
+    Set (Exp a) |
+    BPre a String
+    deriving (Show, Eq, Ord, Functor)
 
-data BlockStmt =
-    If SP Expr ExprStmt |               --- If Then 
-    Else SP ExprStmt |                  --- Else
-    While SP Expr ExprStmt |            --- While 
-    For SP BlockStmt Expr BlockStmt |   --- For 
-    Ret SP (Maybe Expr) |               --- Return
-    Cont SP |                           --- Continue
-    Bre SP |                            --- Break
-    Ass SP Expr Expr |                  --- Assign Register|Ptr
-    Let SP String Expr |                --- Immutable Value
-    Mat SP Expr [CaseStmt] |            --- Pattern Matching
-    Reg SP String Expr                  --- Mutable Primitive
-    deriving (Show, Eq)
+data ExpStmt a = 
+    ExpStmtBlock [BlockStmt a] |
+    ExpStmtExp (Exp a)
+    deriving (Show, Eq, Ord, Functor)
 
-type ExprStmt = Either [BlockStmt] Expr
-
-data FileStmt =
-    Fun SP String Expr ExprStmt |        --- Function Stmt
-    Jdg SP String Expr |                --- Type Judgement
-    Dat SP String [(String, Expr)] |    --- Tagged Type Union
-    Stru SP String [(String, Expr)] |   --- Classic 'C' Struct
-    Dec SP Expr String Expr |           --- Declare: Specifiers, Name, Type
-    Def SP String Expr |                --- Define: Name, Value
-    Imp SP String                       --- Import Header
-    deriving (Show, Eq)
+data FileStmt a =
+    Fun a String (Exp a) (ExpStmt a) | 
+    Jdg a String (Exp a) | 
+    Dat a String (Exp a) [(String, Exp a)] | 
+    Stru a String (Exp a) [(String, Exp a)] | 
+    Dec a (Maybe (Exp a)) String (Exp a) | 
+    Def a String (Exp a) | 
+    Imp a String | 
+    FPre a String
+    deriving (Show, Eq, Ord, Functor)

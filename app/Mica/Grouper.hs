@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Mica.Grouper where 
 
@@ -9,58 +10,42 @@ import Data.Void
 import qualified Data.List.NonEmpty as NE
 
 data LexTree a =
-    LParen [LexTree a] |          -- Everything inside ( )
-    LCurly [LexTree a] |          -- Everything inside { }
-    LBrack [LexTree a] |          -- Everything inside [ ]
-    LBranch [LexTree a] |         -- White space and ';'
+    LParen a [LexTree a] |          -- Everything inside ( )
+    LCurly a [LexTree a] |          -- Everything inside { }
+    LBrack a [LexTree a] |          -- Everything inside [ ]
+    LBranch [LexTree a] |           -- White space and ';'
     LLeaf (MToken a)
     deriving (Show, Eq, Ord, Functor)
 
 type Grouper = Parsec Void [MToken SP]
 
-isDelim :: Char -> MToken a -> Bool
-isDelim d (LDelim _ x) = x == d
-isDelim _ _ = False
-
 gDelim :: Char -> Grouper (MToken SP)
-gDelim d = satisfy (isDelim d)
+gDelim d = satisfy $ \case 
+    (LDelim _ x) -> x == d 
+    _ -> False
 
-gParen :: Grouper (LexTree SP)
-gParen = LParen <$> between (gDelim '(') (gDelim ')') (many gTerm)
-
-gCurly :: Grouper (LexTree SP)
-gCurly = LCurly <$> between (gDelim '{') (gDelim '}') gBlock
-
-gBrack :: Grouper (LexTree SP)
-gBrack = LBrack <$> between (gDelim '[') (gDelim ']') (many gTerm)
-
-isLeaf :: MToken a -> Bool
-isLeaf (LDelim _ _) = False
-isLeaf (LPre _ _) = False
-isLeaf _          = True
-
-gLeaf :: Grouper (LexTree SP)
-gLeaf = LLeaf <$> satisfy isLeaf
-
-gTerm :: Grouper (LexTree SP)
-gTerm = choice [
-    gParen,
-    gCurly,
-    gBrack,
-    gLeaf ]
+gTerm :: Grouper (LexTree SP) 
+gTerm = try $ anySingle >>= \case 
+    LDelim p '(' -> LParen p <$> (many gTerm <* gDelim ')')
+    LDelim p '{' -> LCurly p <$> (gBlock <* gDelim '}')
+    LDelim p '[' -> LBrack p <$> (many gTerm <* gDelim ']') 
+    LDelim p d -> fail $ "expected a valid term, instead got " ++ [d]
+    LPre p s -> fail $ "expected a valid term, instead got " ++ s
+    token -> pure $ LLeaf token
 
 gStmt :: Grouper [LexTree SP]
-gStmt = some gTerm <* satisfy (isDelim ';')
-
-isPre :: MToken a -> Bool
-isPre (LPre _ _) = True
-isPre _ = False
+gStmt = some gTerm <* gDelim ';'
 
 gPre :: Grouper (LexTree SP)
-gPre =  LLeaf <$> satisfy isPre
+gPre =  try $ anySingle >>= \case 
+    t@(LPre _ _) -> pure $ LLeaf t 
+    _ -> fail "expected a preprocessor token"
 
 gBlock:: Grouper [LexTree SP]
-gBlock = many $ LBranch <$> (((:[]) <$> gPre) <|> gStmt)
+gBlock =  many $ LBranch <$> (((:[]) <$> gPre) <|> gStmt)
+
+gMica :: Grouper [LexTree SP] 
+gMica = gBlock <* eof 
 
 prettyMToken :: MToken a -> String
 prettyMToken (LId _ s) = s 
@@ -90,5 +75,5 @@ instance TraversableStream [MToken SP] where
         case tokensLeft of
             []    -> pst
             (t:_) -> pst { 
-                    pstateOffset = o,
-                    pstateSourcePos = mTokenPos t }
+                pstateOffset = o,
+                pstateSourcePos = mTokenPos t }
