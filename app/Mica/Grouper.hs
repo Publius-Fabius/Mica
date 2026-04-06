@@ -13,7 +13,6 @@ data LexTree a =
     LParen a [LexTree a] |          -- Everything inside ( )
     LCurly a [LexTree a] |          -- Everything inside { }
     LBrack a [LexTree a] |          -- Everything inside [ ]
-    LBranch [LexTree a] |           -- White space and ';'
     LLeaf (MToken a)
     deriving (Show, Eq, Ord, Functor)
 
@@ -27,25 +26,13 @@ gDelim d = satisfy $ \case
 gTerm :: Grouper (LexTree SP) 
 gTerm = try $ anySingle >>= \case 
     LDelim p '(' -> LParen p <$> (many gTerm <* gDelim ')')
-    LDelim p '{' -> LCurly p <$> (gBlock <* gDelim '}')
+    LDelim p '{' -> LCurly p <$> (many gTerm <* gDelim '}')
     LDelim p '[' -> LBrack p <$> (many gTerm <* gDelim ']') 
-    LDelim p d -> fail $ "expected a valid term, instead got " ++ [d]
-    LPre p s -> fail $ "expected a valid term, instead got " ++ s
+    LDelim p _ -> fail "expected gTerm, got endBy delimiter"
     token -> pure $ LLeaf token
 
-gStmt :: Grouper [LexTree SP]
-gStmt = some gTerm <* gDelim ';'
-
-gPre :: Grouper (LexTree SP)
-gPre =  try $ anySingle >>= \case 
-    t@(LPre _ _) -> pure $ LLeaf t 
-    _ -> fail "expected a preprocessor token"
-
-gBlock:: Grouper [LexTree SP]
-gBlock =  many $ LBranch <$> (((:[]) <$> gPre) <|> gStmt)
-
 gMica :: Grouper [LexTree SP] 
-gMica = gBlock <* eof 
+gMica = (many gTerm) <* eof 
 
 prettyMToken :: MToken a -> String
 prettyMToken (LId _ s) = s 

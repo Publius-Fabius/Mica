@@ -32,8 +32,8 @@ lexerTest1 = describe "Lexer (Test 1)" $ do
     it "lexes a complex identifier" $
         parse lId "" "_x_123" `shouldParse` LId ip "_x_123"
     it "lexes a delimiter" $ 
-        let result = parse lDelim "" ";" in 
-        strip result `shouldParse` LDelim () ';'
+        let result = parse lDelim "" "(" in 
+        strip result `shouldParse` LDelim () '('
     it "lexes a preprocessor directive at the head of a file" $
         let result = parse lPreHead "" "#hi" in 
         strip result `shouldParse` LPre () "hi" 

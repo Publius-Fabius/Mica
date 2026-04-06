@@ -8,4 +8,4 @@ main :: IO ()
 main = do
     TestLexer.test
     TestGrouper.test
-   -- TestParser.test
+    TestParser.test

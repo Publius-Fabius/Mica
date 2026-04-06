@@ -20,6 +20,7 @@ data MToken p =
     LInt p Integer |            -- Integer
     LDbl p Double |             -- Floating Point Number
     LStr p String |             -- UTF8 String Literal
+    LChar p Char |              -- Char Literal
     LOp p String |              -- Any combo (sans ws) of !#$%&*+./<=>?@\^|-~
     LDelim p Char |             -- (){}[];
     LPre p String
@@ -61,11 +62,14 @@ lStr = lexeme LStr $
     many (satisfy (\c -> c /= '\n' && c /= '"')) <* 
     char '"'
     
+lChar :: Lexer (MToken SP) 
+lChar = lexeme LChar $ char '\'' *> anySingle <* char '\'' 
+
 lDelim :: Lexer (MToken SP)
-lDelim = lexeme LDelim (oneOf ("(){}[];"::String))
+lDelim = lexeme LDelim (oneOf ("(){}[]"::String))
 
 lOp :: Lexer (MToken SP)
-lOp = lexeme LOp (some $ oneOf ("~!@#$%^&*-+=|\\:?/.>,<"::String))
+lOp = lexeme LOp (some $ oneOf ("~!@#$%^&*-+=|\\:?/.>,<;"::String))
 
 lId :: Lexer (MToken SP)
 lId = lexeme LId ((:) <$> 
@@ -79,6 +83,7 @@ lToken :: Lexer (MToken SP)
 lToken = try $ lPreBody <|> (vsc >> choice [
     lNumber, 
     lStr, 
+    lChar, 
     lDelim, 
     lOp,
     lId])

@@ -12,3 +12,15 @@ data FixedArr * -> * -> * -> *;
 
 -- Lam Locality [Captures] (Domain -> Codomain)
 data Lam * -> [*] -> * -> *;
+
+
+
+while (condition) stmt; | {...block...}
+match (condition) { 
+    Op x y z => stmt; | {...block...}
+     
+} 
+pattern ? exp; | {...block...}
+
+
+for stmt; exp; stmt :   
