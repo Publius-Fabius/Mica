@@ -43,15 +43,6 @@ prettyMToken (LOp _ s) = s
 prettyMToken (LDelim _ c) = [c]
 prettyMToken (LPre _ s) = "#" ++ s
 
-mTokenPos :: MToken a -> a 
-mTokenPos (LId p _) = p
-mTokenPos (LInt p _) = p
-mTokenPos (LDbl p _) = p
-mTokenPos (LStr p _) = p
-mTokenPos (LOp p _) = p
-mTokenPos (LDelim p _) = p
-mTokenPos (LPre p _) = p
-
 instance VisualStream [MToken SP] where 
      showTokens _ = unwords . map prettyMToken . NE.toList 
     

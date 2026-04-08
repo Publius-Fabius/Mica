@@ -5,18 +5,6 @@ module Mica.Type where
 -- World's best systems programming language. 
 -- The one true spiritual successor to C.
 
-data Reg a = 
-    Heap a | 
-    Stack a | 
-    Local a | 
-    Data a 
-    deriving (Show, Eq, Ord, Functor) 
-
-data Acc a = 
-    Read a | 
-    Write a 
-    deriving (Show, Eq, Ord, Functor) 
-
 data Arg a = 
     Arg (Name a) (Maybe (Exp a)) 
     deriving (Show, Eq, Ord, Functor) 
@@ -27,12 +15,8 @@ data Name a =
 
 data Exp a =
     TVar a String |
-    TLam a (Reg a) (Acc a) (Exp a) | 
-    TPtr a (Reg a) (Acc a) (Acc a) (Exp a) | 
-    TArr a (Reg a) (Acc a) (Acc a) (Exp a) |
-    TSli a (Reg a) (Acc a) (Acc a) (Exp a) |
-    Lam a (Reg a) [Arg a] (Body a) | 
     Iden a String | 
+    Lam a [Arg a] (Body a) | 
     Bin a String (Exp a) (Exp a) | 
     Una a String (Exp a) | 
     Tri a (Exp a) (Exp a) (Exp a) | 
@@ -40,8 +24,7 @@ data Exp a =
     DblLit a Double | 
     StrLit a String | 
     CharLit a Char |
-    Brack a (Exp a) |
-    Paren a (Exp a)
+    Brack a (Exp a) 
     deriving (Show, Eq, Ord, Functor)
 
 data BlockStmt a =
@@ -64,7 +47,7 @@ data Case a =
     deriving (Show, Eq, Ord, Functor)
 
 data Body a = 
-    Compound (BlockStmt a) |
+    Compound [BlockStmt a] |
     Inline (Exp a)
     deriving (Show, Eq, Ord, Functor)
 
@@ -77,7 +60,20 @@ data FileStmt a =
     Inc a String |
     Sum a (Name a) [Name a] [Memb a] | 
     Rec a (Name a) [Name a] [Memb a] | 
-    Jdg a (Name a) (Exp a) | 
-    Map a (Name a) [Arg a] (Body a) | 
-    Def a (Name a) (Acc a) (Acc a) (Exp a) (Maybe (Exp a)) 
+    Fun a (Name a) [Arg a] (Body a) | 
+    Dec a (Name a) (Exp a) | 
+    Def a (Name a) (Arg a) (Exp a) 
     deriving (Show, Eq, Ord, Functor)
+
+prettyExp :: Exp a -> String 
+prettyExp (TVar _ s) = s 
+prettyExp (Iden _ s) = s 
+prettyExp (Lam _ _ _) = undefined
+prettyExp (Bin _ op lx rx) = prettyExp lx ++ " " ++ op ++ " " ++ prettyExp rx
+prettyExp (Una _ op ex) = op ++ prettyExp ex
+prettyExp (Tri _ _ _ _) = undefined
+prettyExp (IntLit _ v) = show v
+prettyExp (DblLit _ v) = show v
+prettyExp (StrLit _ v) = show v
+prettyExp (CharLit _ v) = show v
+prettyExp (Brack _ x) = "[" ++ prettyExp x ++ "]"

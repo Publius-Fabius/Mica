@@ -25,8 +25,8 @@ runner p txt = case parse lMica "" txt of
 failer p txt = case parse lMica "" txt of 
     Right tokens -> case parse gMica "" tokens of 
         Right trees -> parse p "" `shouldFailOn` trees 
-        Left err -> putStrLn $ errorBundlePretty err 
-    Left err -> putStrLn $ errorBundlePretty err 
+        Left err -> error $ errorBundlePretty err 
+    Left err -> error $ errorBundlePretty err 
 
 test1 :: Spec 
 test1 = describe "Parser (Test 1)" $ do
@@ -62,34 +62,28 @@ test1 = describe "Parser (Test 1)" $ do
     it "parses an identifier inside a brack" $ 
         let result = runner (pBrack (pIden Name <* eof) <* eof) "[hi]" in
             (strip result) `shouldParse` (Name () "hi")
-    it "parses an identifier atom" $ 
-        let result = runner (pAtom <* eof) "hi" in    
+    it "parses an identifier expression" $ 
+        let result = runner (pExp <* eof) "hi" in    
             (strip result) `shouldParse` (Iden () "hi")
-    it "parses double literal atom" $ 
-        let result = runner (pAtom <* eof) "3.14" in    
+    it "parses double literal expression" $ 
+        let result = runner (pExp <* eof) "3.14" in    
             (strip result) `shouldParse` (DblLit () 3.14)
-    it "parses an integer literal atom" $ 
-        let result = runner (pAtom <* eof) "314" in    
+    it "parses an integer literal expression" $ 
+        let result = runner (pExp <* eof) "314" in    
             (strip result) `shouldParse` (IntLit () 314)
-    it "parses a string literal atom" $ 
-        let result = runner (pAtom <* eof) "\"hello\"" in    
+    it "parses a string literal expression" $ 
+        let result = runner (pExp <* eof) "\"hello\"" in    
             (strip result) `shouldParse` (StrLit () "hello")
-    it "parses a char literal atom" $ 
-        let result = runner (pAtom <* eof) "\'a\'" in    
+    it "parses a char literal expression" $ 
+        let result = runner (pExp <* eof) "\'a\'" in    
             (strip result) `shouldParse` (CharLit () 'a')
-    it "parses a unary atom" $ 
-        let result = runner (pAtom <* eof) "+a" in 
-            (strip result) `shouldParse` (Una () "+" (Iden () "a")) 
-    it "parses a nested unary atom" $ 
-        let result = runner (pAtom <* eof) "+ -a" in 
-            (strip result) `shouldParse` 
-                (Una () "+" (Una () "-" (Iden () "a"))) 
-    it "parses an identifier expression" $
-        let result = runner (pExp <* eof) "a" in 
-            (strip result) `shouldParse` (Iden () "a")
-    it "parses a unary expression" $
+    it "parses a unary expression" $ 
         let result = runner (pExp <* eof) "+a" in 
             (strip result) `shouldParse` (Una () "+" (Iden () "a")) 
+    it "parses a nested unary expression" $ 
+        let result = runner (pExp <* eof) "+ -a" in 
+            (strip result) `shouldParse` 
+                (Una () "+" (Una () "-" (Iden () "a"))) 
     it "parses a binary expression" $
         let result = runner (pExp <* eof) "a+b" in 
             (strip result) `shouldParse` 
@@ -120,12 +114,62 @@ test1 = describe "Parser (Test 1)" $ do
         let result = runner (pExp <* eof) "(a+b)*c" in 
             (strip result) `shouldParse` 
             (Bin () "*" 
-                (Paren () (Bin () "+" (Iden () "a") (Iden () "b"))) 
+                (Bin () "+" (Iden () "a") (Iden () "b")) 
                 (Iden () "c"))  
+    it "parses an arrow expression (rassoc) properly" $ 
+        let result = runner (pExp <* eof) "a -> b -> c" in 
+            (strip result) `shouldParse` 
+            (Bin () "->" (Iden () "a") 
+                (Bin () "->" (Iden () "b") (Iden () "c")))
+    it "parses an expression with funapp and binary operations" $ 
+        let result = runner (pExp <* eof) "f x + y" in 
+            (strip result) `shouldParse` 
+            (Bin () "+" 
+                (Bin () " " (Iden () "f") (Iden () "x")) 
+                (Iden () "y"))
     it "parses an assignment operation" $ 
         let result = runner (pBlockStmt <* eof) "x := y;" in 
             (strip result) `shouldParse` 
             (Assign (Bin () ":=" (Iden () "x") (Iden () "y")))
-        
+    it "parses an untyped let statement" $ 
+        let result = runner (pBlockStmt <* eof) "let x = y;" in 
+            (strip result) `shouldParse` 
+            (Let () (Arg (Name () "x") Nothing) (Iden () "y"))
+    it "parses a typed let statement" $ 
+        let result = runner (pBlockStmt <* eof) "let (x:T y) = z;" in 
+            (strip result) `shouldParse` 
+            (Let () 
+                (Arg (Name () "x") 
+                (Just $ Bin () " " (Iden () "T") (Iden () "y"))) 
+                (Iden () "z"))
+    it "parses an if statement without a curly body" $ 
+        let result = runner (pBlockStmt <* eof) "if(c) x;" in 
+            (strip result) `shouldParse` 
+            (If () (Iden () "c") (Assign (Iden () "x")))
+    it "parses an if statement with a curly body" $ 
+        let result = runner (pBlockStmt <* eof) "if(c) {x;}" in 
+            (strip result) `shouldParse` 
+            (If () (Iden () "c") (Block () [Assign (Iden () "x")]))
+    it "parses an else statement without a curly body" $ 
+        let result = runner (pBlockStmt <* eof) "else x;" in 
+            (strip result) `shouldParse` 
+            (Else () (Assign (Iden () "x")))
+    it "parses an else statement with a curly body" $ 
+        let result = runner (pBlockStmt <* eof) "else {x;}" in 
+            (strip result) `shouldParse` 
+            (Else () (Block () [Assign (Iden () "x")]))
+    it "parses a match statement with one case with no args" $ 
+        let result = runner (pBlockStmt <* eof) "match (c) { x => y; }" in 
+            (strip result) `shouldParse` 
+            (Mat () 
+                (Iden () "c") 
+                [Case (Name () "x") [] (Assign (Iden () "y"))])
+    it "parses a match statement with one case with one arg" $ 
+        let result = runner (pBlockStmt <* eof) "match (c) { x a => y; }" in 
+            (strip result) `shouldParse` 
+            (Mat () 
+                (Iden () "c") 
+                [Case (Name () "x") [Name () "a"] (Assign (Iden () "y"))])
+
 test :: IO ()
 test = hspec test1

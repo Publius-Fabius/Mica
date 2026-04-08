@@ -29,6 +29,15 @@ data MToken p =
 type Lexer = Parsec Void Text
 isNextEnd = lookAhead (void eol) <|> lookAhead eof
 
+mTokenPos :: MToken a -> a 
+mTokenPos (LId p _) = p
+mTokenPos (LInt p _) = p
+mTokenPos (LDbl p _) = p
+mTokenPos (LStr p _) = p
+mTokenPos (LOp p _) = p
+mTokenPos (LDelim p _) = p
+mTokenPos (LPre p _) = p
+
 lPre :: Lexer (MToken SP)
 lPre = do 
     pos <- getSourcePos 

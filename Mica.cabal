@@ -62,17 +62,20 @@ test-suite mica-test
         Mica.Lexer, 
         Mica.Parser, 
         Mica.Type,
-        Mica.Grouper, 
+        Mica.Grouper,
+        Mica.Checker, 
         TestLexer,
         TestGrouper,
-        TestParser
+        TestParser,
+        TestChecker
     build-depends: 
         base ^>=4.18.2.1, 
         hspec,
         hspec-megaparsec,
         megaparsec, 
         text, 
-        containers
+        containers,
+        mtl
     default-language:    Haskell2010
 
 -- executable Mica
