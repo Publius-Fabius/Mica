@@ -10,4 +10,4 @@ main = do
     TestLexer.test
     TestGrouper.test
     TestParser.test
-   -- TestChecker.test
+    TestChecker.test
