@@ -64,6 +64,7 @@ test-suite mica-test
         Mica.Type,
         Mica.Grouper,
         Mica.Checker, 
+        Mica.Builder,
         TestLexer,
         TestGrouper,
         TestParser,

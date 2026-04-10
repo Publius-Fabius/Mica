@@ -4,10 +4,11 @@
 
 module Mica.Lexer where
 
-import Data.Text (Text)
+import Data.Text
 import Data.List
 import Text.Megaparsec
 import Text.Megaparsec.Char
+import Data.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Data.Void
 import qualified Data.List.NonEmpty as NE
@@ -16,14 +17,14 @@ import Control.Monad
 type SP = SourcePos 
 
 data MToken p = 
-    LId p String |              -- Identifier
+    LId p Text |                -- Identifier
     LInt p Integer |            -- Integer
     LDbl p Double |             -- Floating Point Number
-    LStr p String |             -- UTF8 String Literal
+    LStr p Text |               -- UTF8 String Literal
     LChar p Char |              -- Char Literal
-    LOp p String |              -- Any combo (sans ws) of !#$%&*+./<=>?@\^|-~
+    LOp p Text |                -- Any combo (sans ws) of !#$%&*+./<=>?@\^|-~
     LDelim p Char |             -- (){}[];
-    LPre p String
+    LPre p Text
     deriving (Show, Eq, Ord, Functor)
     
 type Lexer = Parsec Void Text
@@ -38,11 +39,20 @@ mTokenPos (LOp p _) = p
 mTokenPos (LDelim p _) = p
 mTokenPos (LPre p _) = p
 
+prettyMToken :: MToken a -> Text
+prettyMToken (LId _ s) = s 
+prettyMToken (LInt _ i) = pack $ show i
+prettyMToken (LDbl _ d) = pack $ show d
+prettyMToken (LStr _ s) = "\"" <> s <> "\""
+prettyMToken (LOp _ s) = s 
+prettyMToken (LDelim _ c) = Data.Text.singleton c
+prettyMToken (LPre _ s) = "#" <> s
+
 lPre :: Lexer (MToken SP)
 lPre = do 
     pos <- getSourcePos 
     char '#'
-    LPre pos <$> manyTill anySingle isNextEnd
+    LPre pos . pack <$> manyTill anySingle isNextEnd
 
 lPreHead :: Lexer (MToken SP)
 lPreHead = try $ vsc *> lPre
@@ -68,7 +78,8 @@ lInt = lexeme LInt L.decimal
 lStr :: Lexer (MToken SP)
 lStr = lexeme LStr $ 
     char '"' *> 
-    many (satisfy (\c -> c /= '\n' && c /= '"')) <* 
+    takeWhileP (Just "string lit char") 
+    (\c -> c /= '\n' && c /= '"') <* 
     char '"'
     
 lChar :: Lexer (MToken SP) 
@@ -78,12 +89,18 @@ lDelim :: Lexer (MToken SP)
 lDelim = lexeme LDelim (oneOf ("(){}[]"::String))
 
 lOp :: Lexer (MToken SP)
-lOp = lexeme LOp (some $ oneOf ("~!@#$%^&*-+=|\\:?/.>,<;"::String))
+lOp = lexeme LOp (
+    takeWhile1P (Just "op char") $ 
+    (\c -> Data.Text.any (c==) "~!@#$%^&*-+=|\\:?/.>,<;"))
 
 lId :: Lexer (MToken SP)
-lId = lexeme LId ((:) <$> 
-    (letterChar <|> char '_') <*> 
-    many (alphaNumChar <|> char '_'))
+lId = do
+    sp <- getSourcePos
+    first <- letterChar <|> char '_'
+    rest <- takeWhileP 
+        (Just "alphanumeric or _") 
+        (\c -> isAlphaNum c || c == '_')
+    pure $ LId sp (Data.Text.singleton first <> rest)
 
 lNumber :: Lexer (MToken SP)
 lNumber = try lDbl <|> lInt

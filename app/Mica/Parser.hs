@@ -2,6 +2,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Mica.Parser where 
 import Mica.Grouper
@@ -9,6 +10,7 @@ import Mica.Lexer
 import Mica.Type
 import Text.Megaparsec
 import Data.Void
+import Data.Text
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -23,37 +25,43 @@ data OpTy =
 
 data OpRec = OpRec { opTy :: OpTy, lbp :: Int, rbp :: Int } 
 
-type OpMap = Map.Map String OpRec
+type OpMap = Map.Map Text OpRec
 
-pRawIden :: Parser String 
-pRawIden = token extract Set.empty <?> "raw identifier"
+pRawIden :: Parser Text 
+pRawIden = 
+    token extract Set.empty <?> unpack "raw identifier"
     where 
         extract (LLeaf (LId _ s)) = Just s 
         extract _ = Nothing
 
-pRawStrLit :: Parser String 
-pRawStrLit = token extract Set.empty <?> "string literal"
+pRawStrLit :: Parser Text 
+pRawStrLit = 
+    token extract Set.empty <?> unpack "Text literal"
     where 
         extract (LLeaf (LStr _ s)) = Just s
         extract _ = Nothing
     
-pExpectOp :: String -> Parser SP 
-pExpectOp op = token extract Set.empty <?> ("expects operator " ++ op)
+pExpectOp :: Text -> Parser SP 
+pExpectOp op = 
+    token extract Set.empty <?> 
+    (unpack $ "expects operator " <> op)
     where 
         extract (LLeaf (LOp p op')) = if op == op' 
             then Just p 
             else Nothing
         extract _ = Nothing 
 
-pExpectIden :: String -> Parser SP 
-pExpectIden iden = token extract Set.empty <?> ("expects identifier " ++ iden)
+pExpectIden :: Text -> Parser SP 
+pExpectIden iden = 
+    token extract Set.empty <?> 
+    (unpack $ "expects identifier " <> iden)
     where 
         extract (LLeaf (LId p iden')) = if iden == iden' 
             then Just p 
             else Nothing
         extract _ = Nothing
 
-pIden :: (SP -> String -> a) -> Parser a
+pIden :: (SP -> Text -> a) -> Parser a
 pIden f = token extract Set.empty <?> "identifier"
     where 
         extract (LLeaf (LId p i)) = Just $ f p i 
@@ -100,7 +108,7 @@ liftPrimary (LInt p v) = pure $ IntLit p v
 liftPrimary (LDbl p v) = pure $ DblLit p v 
 liftPrimary (LStr p v) = pure $ StrLit p v 
 liftPrimary (LChar p v) = pure $ CharLit p v
-liftPrimary t = fail $ "bad primary type " ++ show t
+liftPrimary t = fail $ unpack $ "bad primary type " <> pack (show t)
 
 pNud :: Int -> Parser (Exp SP)
 pNud thresh = satisfy (not . isCtrlOp) >>= \case 
@@ -111,7 +119,7 @@ pNud thresh = satisfy (not . isCtrlOp) >>= \case
         ex <- Brack sp <$> recurse as (pNud 0) 
         pLed thresh ex
     LLeaf (LOp p op) -> do
-        opRec <- opInfo ("_" ++ op) expOps
+        opRec <- opInfo ("_" <> op) expOps
         pNudUna (rbp opRec) (Una p op) 
     LLeaf (LId p "lam") -> undefined
     LLeaf token -> do
@@ -128,7 +136,7 @@ pNudUna thresh cont = satisfy (not . isCtrlOp) >>= \case
         ex <- Brack sp <$> recurse as (pNud 0) 
         pLed thresh (cont ex)
     LLeaf (LOp p op) -> do
-        opRec <- opInfo ("_" ++ op) expOps
+        opRec <- opInfo ("_" <> op) expOps
         pNudUna (rbp opRec) (cont . Una p op) 
     LCurly _ _ -> fail "expected a nud, instead got a curly"
     LLeaf token -> do
@@ -204,8 +212,14 @@ pBody = compoundBody <|> inlineBody
         compoundBody = Compound <$> pCurly (many pBlockStmt)
         inlineBody = Inline <$> pExp <* pExpectOp ";"
 
+pBlock :: Parser [BlockStmt SP]
+pBlock = curlyBlock <|> simpleBlock
+    where 
+        curlyBlock = pCurly (many pBlockStmt)
+        simpleBlock = (:[]) <$> pBlockStmt
+
 pFor :: SP -> Parser (BlockStmt SP) 
-pFor p = header <*> pBlockStmt 
+pFor p = header <*> pBlock 
     where
         header =
             pParen $ For p <$>
@@ -217,26 +231,26 @@ pCase :: Parser (Case SP)
 pCase = Case <$> 
     pIden Name <*> 
     many (pIden Name) <*>
-    (pExpectOp "=>" *> pBlockStmt)
+    (pExpectOp "=>" *> pBlock)
 
 pBlockStmt :: Parser (BlockStmt SP) 
 pBlockStmt = (lookAhead anySingle) >>= \case 
     LLeaf (LId p "if")-> do 
         anySingle
-        If p <$> pParen pExp <*> pBlockStmt 
+        If p <$> pParen pExp <*> pBlock 
 
     LLeaf (LId p "else") -> do 
         anySingle
-        Else p <$> pBlockStmt
+        Else p <$> pBlock
     
     LLeaf (LId p "while") -> do 
         anySingle
-        While p <$> pParen pExp <*> pBlockStmt 
+        While p <$> pParen pExp <*> pBlock 
     
     LLeaf (LId p "do") -> do 
         anySingle
         DoWhile p <$> 
-            pCurly pBlockStmt <*> 
+            pCurly (many pBlockStmt) <*> 
             (pExpectIden "while" *> pParen pExp)
     
     LLeaf (LId p "return") -> do 
@@ -251,10 +265,6 @@ pBlockStmt = (lookAhead anySingle) >>= \case
         anySingle
         Brk p <$ pExpectOp ";"
     
-    LCurly p bs -> do
-        anySingle
-        Block p <$> recurse bs (many pBlockStmt)
-
     LLeaf (LId p "match") -> do 
         anySingle
         Mat p <$> pParen pExp <*> pCurly (many pCase) 
@@ -269,6 +279,8 @@ pBlockStmt = (lookAhead anySingle) >>= \case
         anySingle
         pFor p
     
+    LCurly p bs -> fail "expected a block stmt, got a curly"
+
     _ -> Assign <$> pExp <* pExpectOp ";"
 
 pMemb :: Parser (Memb SP)
@@ -311,10 +323,13 @@ pFileStmt = anySingle >>= \ case
 pMica :: Parser [FileStmt SP]
 pMica = (many pFileStmt) <* eof
 
-prettyLexTree :: LexTree a -> String 
-prettyLexTree (LParen _ ts) = "(" ++ unwords (map prettyLexTree ts) ++ ")"
-prettyLexTree (LCurly _ ts) = "{" ++ unwords (map prettyLexTree ts) ++ "}"
-prettyLexTree (LBrack _ ts) = "[" ++ unwords (map prettyLexTree ts) ++ "]"
+prettyLexTree :: LexTree a -> Text 
+prettyLexTree (LParen _ ts) =
+    "(" <> Data.Text.unwords (Prelude.map prettyLexTree ts) <> ")"
+prettyLexTree (LCurly _ ts) = 
+    "{" <> Data.Text.unwords (Prelude.map prettyLexTree ts) <> "}"
+prettyLexTree (LBrack _ ts) = 
+    "[" <> Data.Text.unwords (Prelude.map prettyLexTree ts) <> "]"
 prettyLexTree (LLeaf l) = prettyMToken l
 
 lexTreePos :: LexTree SP -> SP
@@ -324,22 +339,23 @@ lexTreePos (LBrack sp _) = sp
 lexTreePos (LLeaf l) = mTokenPos l
 
 instance VisualStream [LexTree SP] where 
-     showTokens _ = unwords . map prettyLexTree . NE.toList 
+     showTokens _ = 
+        unpack . Data.Text.unwords . Prelude.map prettyLexTree . NE.toList 
     
 instance TraversableStream [LexTree SP] where 
     reachOffsetNoLine o pst = 
         let offsetDiff = o - pstateOffset pst in
-        let tokensLeft = drop offsetDiff (pstateInput pst) in
+        let tokensLeft = Prelude.drop offsetDiff (pstateInput pst) in
         case tokensLeft of
             []    -> pst
             (t:_) -> pst { 
                 pstateOffset = o,
                 pstateSourcePos = lexTreePos t }
 
-opInfo :: String -> OpMap -> Parser OpRec
+opInfo :: Text -> OpMap -> Parser OpRec
 opInfo op opMap = case Map.lookup op opMap of 
     Just a -> pure a 
-    Nothing -> fail $ "operator not found " ++ op 
+    Nothing -> fail $ unpack $ "operator not found " <> op 
 
 expOps :: OpMap
 expOps = Map.fromList [ 
