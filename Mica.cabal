@@ -59,6 +59,7 @@ test-suite mica-test
     hs-source-dirs:      test, app
     main-is:             Test.hs
     other-modules: 
+        Mica.Cute,
         Mica.Lexer, 
         Mica.Parser, 
         Mica.Type,

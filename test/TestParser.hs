@@ -130,7 +130,7 @@ test1 = describe "Parser (Test 1)" $ do
     it "parses an assignment operation" $ 
         let result = runner (pBlockStmt <* eof) "x := y;" in 
             (strip result) `shouldParse` 
-            (Assign (Bin () ":=" (Iden () "x") (Iden () "y")))
+            (ExpStmt (Bin () ":=" (Iden () "x") (Iden () "y")))
     it "parses an untyped let statement" $ 
         let result = runner (pBlockStmt <* eof) "let x = y;" in 
             (strip result) `shouldParse` 
@@ -145,27 +145,27 @@ test1 = describe "Parser (Test 1)" $ do
     it "parses an if statement without a curly body" $ 
         let result = runner (pBlockStmt <* eof) "if(c) x;" in 
             (strip result) `shouldParse` 
-            (If () (Iden () "c") [Assign (Iden () "x")])
+            (If () (Iden () "c") [ExpStmt (Iden () "x")])
     it "parses an if statement with a curly body" $ 
         let result = runner (pBlockStmt <* eof) "if(c) {x;}" in 
             (strip result) `shouldParse` 
-            (If () (Iden () "c") [Assign (Iden () "x")])
+            (If () (Iden () "c") [ExpStmt (Iden () "x")])
     it "parses an else statement without a curly body" $ 
         let result = runner (pBlockStmt <* eof) "else x;" in 
             (strip result) `shouldParse` 
-            (Else () [Assign (Iden () "x")])
+            (Else () [ExpStmt (Iden () "x")])
     it "parses a match statement with one case with no args" $ 
         let result = runner (pBlockStmt <* eof) "match (c) { x => y; }" in 
             (strip result) `shouldParse` 
             (Mat () 
                 (Iden () "c") 
-                [Case (Name () "x") [] [Assign (Iden () "y")]])
+                [Case (Name () "x") [] [ExpStmt (Iden () "y")]])
     it "parses a match statement with one case with one arg" $ 
         let result = runner (pBlockStmt <* eof) "match (c) { x a => y; }" in 
             (strip result) `shouldParse` 
             (Mat () 
                 (Iden () "c") 
-                [Case (Name () "x") [Name () "a"] [Assign (Iden () "y")]])
+                [Case (Name () "x") [Name () "a"] [ExpStmt (Iden () "y")]])
 
 test :: IO ()
 test = hspec test1

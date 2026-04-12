@@ -223,9 +223,9 @@ pFor p = header <*> pBlock
     where
         header =
             pParen $ For p <$>
-            pBlockStmt <*> 
+            pExp <*> 
             (pExpectOp ";" *> pExp) <*> 
-            (pExpectOp ";" *> pBlockStmt)
+            (pExpectOp ";" *> pExp)
 
 pCase :: Parser (Case SP) 
 pCase = Case <$> 
@@ -281,7 +281,7 @@ pBlockStmt = (lookAhead anySingle) >>= \case
     
     LCurly p bs -> fail "expected a block stmt, got a curly"
 
-    _ -> Assign <$> pExp <* pExpectOp ";"
+    _ -> ExpStmt <$> pExp <* pExpectOp ";"
 
 pMemb :: Parser (Memb SP)
 pMemb = Memb <$> pIden Name <* pExpectOp ":" <*> pExp
