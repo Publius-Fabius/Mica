@@ -48,124 +48,124 @@ test1 = describe "Parser (Test 1)" $ do
         failer (pExpectIden "x" <* eof) "&"
     it "parses an identifier into a Name constructor" $ 
         let result = runner (pIden Name <* eof) "hi" in
-            (strip result) `shouldParse` (Name () "hi")
+            strip result `shouldParse` Name () "hi"
     it "does not parse an identifier when there's an operator" $
         failer (pIden Name <* eof) "$"
     it "does not parse an identifier when there's a paren" $
         failer (pIden Name <* eof) "()"
     it "parses an identifier inside a paren" $ 
         let result = runner (pParen (pIden Name <* eof) <* eof) "(hi)" in
-            (strip result) `shouldParse` (Name () "hi")
+            strip result `shouldParse` Name () "hi"
     it "parses an identifier inside a curly" $ 
         let result = runner (pCurly (pIden Name <* eof) <* eof) "{hi}" in
-            (strip result) `shouldParse` (Name () "hi")
+            strip result `shouldParse` Name () "hi"
     it "parses an identifier inside a brack" $ 
         let result = runner (pBrack (pIden Name <* eof) <* eof) "[hi]" in
-            (strip result) `shouldParse` (Name () "hi")
+            strip result `shouldParse` Name () "hi"
     it "parses an identifier expression" $ 
         let result = runner (pExp <* eof) "hi" in    
-            (strip result) `shouldParse` (Iden () "hi")
+            strip result `shouldParse` Iden () "hi"
     it "parses double literal expression" $ 
         let result = runner (pExp <* eof) "3.14" in    
-            (strip result) `shouldParse` (DblLit () 3.14)
+            strip result `shouldParse` DblLit () 3.14
     it "parses an integer literal expression" $ 
         let result = runner (pExp <* eof) "314" in    
-            (strip result) `shouldParse` (IntLit () 314)
+            strip result `shouldParse` IntLit () 314
     it "parses a string literal expression" $ 
         let result = runner (pExp <* eof) "\"hello\"" in    
-            (strip result) `shouldParse` (StrLit () "hello")
+            strip result `shouldParse` StrLit () "hello"
     it "parses a char literal expression" $ 
         let result = runner (pExp <* eof) "\'a\'" in    
-            (strip result) `shouldParse` (CharLit () 'a')
+            strip result `shouldParse` CharLit () 'a'
     it "parses a unary expression" $ 
         let result = runner (pExp <* eof) "+a" in 
-            (strip result) `shouldParse` (Una () "+" (Iden () "a")) 
+            strip result `shouldParse` Una () "+" (Iden () "a") 
     it "parses a nested unary expression" $ 
         let result = runner (pExp <* eof) "+ -a" in 
-            (strip result) `shouldParse` 
-                (Una () "+" (Una () "-" (Iden () "a"))) 
+            strip result `shouldParse` 
+                Una () "+" (Una () "-" (Iden () "a")) 
     it "parses a binary expression" $
         let result = runner (pExp <* eof) "a+b" in 
-            (strip result) `shouldParse` 
-            (Bin () "+" (Iden () "a") (Iden () "b")) 
+            strip result `shouldParse` 
+            Bin () "+" (Iden () "a") (Iden () "b") 
     it "parses two binary operations with proper precedence (reverse order)" $
         let result = runner (pExp <* eof) "a+b*c" in 
-            (strip result) `shouldParse` 
-            (Bin () "+" (Iden () "a") (Bin () "*" (Iden () "b") (Iden () "c")))
+            strip result `shouldParse` 
+            Bin () "+" (Iden () "a") (Bin () "*" (Iden () "b") (Iden () "c"))
     it "parses two binary operations with proper precedence (same op)" $
         let result = runner (pExp <* eof) "a+b+c" in 
-            (strip result) `shouldParse` 
-            (Bin () "+" (Bin () "+" (Iden () "a") (Iden () "b")) (Iden () "c"))
+            strip result `shouldParse` 
+            Bin () "+" (Bin () "+" (Iden () "a") (Iden () "b")) (Iden () "c")
     it "parses a binary with a unary in the second operand" $
         let result = runner (pExp <* eof) "a+ -b" in 
-            (strip result) `shouldParse` 
-            (Bin () "+" (Iden () "a") (Una () "-" (Iden () "b")))
+            strip result `shouldParse` 
+            Bin () "+" (Iden () "a") (Una () "-" (Iden () "b"))
     it "parses a binary with a unary in the first operand" $
         let result = runner (pExp <* eof) "-1 + 2" in 
-            (strip result) `shouldParse` 
-            (Bin () "+" (Una () "-" (IntLit () 1)) (IntLit () 2))
+            strip result `shouldParse` 
+            Bin () "+" (Una () "-" (IntLit () 1)) (IntLit () 2)
     it "parses a binary with a unary in the first and second operand" $
         let result = runner (pExp <* eof) "-1 + -2" in 
-            (strip result) `shouldParse` 
-            (Bin () "+" (Una () "-" (IntLit () 1)) (Una () "-" (IntLit () 2)))
+            strip result `shouldParse` 
+            Bin () "+" (Una () "-" (IntLit () 1)) (Una () "-" (IntLit () 2))
     it "does not parse a semi as an expression" $
         failer (pExp  <* eof) ";"
     it "associates operands by parentheses" $
         let result = runner (pExp <* eof) "(a+b)*c" in 
-            (strip result) `shouldParse` 
-            (Bin () "*" 
+            strip result `shouldParse` 
+            Bin () "*" 
                 (Bin () "+" (Iden () "a") (Iden () "b")) 
-                (Iden () "c"))  
+                (Iden () "c")  
     it "parses an arrow expression (rassoc) properly" $ 
         let result = runner (pExp <* eof) "a -> b -> c" in 
-            (strip result) `shouldParse` 
-            (Bin () "->" (Iden () "a") 
-                (Bin () "->" (Iden () "b") (Iden () "c")))
+            strip result `shouldParse` 
+            Bin () "->" (Iden () "a") 
+                (Bin () "->" (Iden () "b") (Iden () "c"))
     it "parses an expression with funapp and binary operations" $ 
         let result = runner (pExp <* eof) "f x + y" in 
-            (strip result) `shouldParse` 
-            (Bin () "+" 
+            strip result `shouldParse` 
+            Bin () "+" 
                 (Bin () " " (Iden () "f") (Iden () "x")) 
-                (Iden () "y"))
+                (Iden () "y")
     it "parses an assignment operation" $ 
         let result = runner (pBlockStmt <* eof) "x := y;" in 
-            (strip result) `shouldParse` 
-            (ExpStmt (Bin () ":=" (Iden () "x") (Iden () "y")))
+            strip result `shouldParse` 
+            ExpStmt (Bin () ":=" (Iden () "x") (Iden () "y"))
     it "parses an untyped let statement" $ 
         let result = runner (pBlockStmt <* eof) "let x = y;" in 
-            (strip result) `shouldParse` 
-            (Let () (Arg (Name () "x") Nothing) (Iden () "y"))
+            strip result `shouldParse` 
+            Let () (Arg (Name () "x") Nothing) (Iden () "y")
     it "parses a typed let statement" $ 
         let result = runner (pBlockStmt <* eof) "let (x:T y) = z;" in 
-            (strip result) `shouldParse` 
-            (Let () 
+            strip result `shouldParse` 
+            Let () 
                 (Arg (Name () "x") 
                 (Just $ Bin () " " (Iden () "T") (Iden () "y"))) 
-                (Iden () "z"))
+                (Iden () "z")
     it "parses an if statement without a curly body" $ 
         let result = runner (pBlockStmt <* eof) "if(c) x;" in 
-            (strip result) `shouldParse` 
-            (If () (Iden () "c") [ExpStmt (Iden () "x")])
+            strip result `shouldParse` 
+            If () (Iden () "c") [ExpStmt (Iden () "x")]
     it "parses an if statement with a curly body" $ 
         let result = runner (pBlockStmt <* eof) "if(c) {x;}" in 
-            (strip result) `shouldParse` 
-            (If () (Iden () "c") [ExpStmt (Iden () "x")])
+            strip result `shouldParse` 
+            If () (Iden () "c") [ExpStmt (Iden () "x")]
     it "parses an else statement without a curly body" $ 
         let result = runner (pBlockStmt <* eof) "else x;" in 
-            (strip result) `shouldParse` 
-            (Else () [ExpStmt (Iden () "x")])
+            strip result `shouldParse` 
+            Else () [ExpStmt (Iden () "x")]
     it "parses a match statement with one case with no args" $ 
-        let result = runner (pBlockStmt <* eof) "match (c) { x => y; }" in 
-            (strip result) `shouldParse` 
-            (Mat () 
+        let result = runner (pBlockStmt <* eof) "match (c) { x = y; }" in 
+            strip result `shouldParse` 
+            Mat () 
                 (Iden () "c") 
-                [Case (Name () "x") [] [ExpStmt (Iden () "y")]])
+                [Case (Name () "x") [] [ExpStmt (Iden () "y")]]
     it "parses a match statement with one case with one arg" $ 
-        let result = runner (pBlockStmt <* eof) "match (c) { x a => y; }" in 
-            (strip result) `shouldParse` 
-            (Mat () 
+        let result = runner (pBlockStmt <* eof) "match (c) { x a = y; }" in 
+            strip result `shouldParse` 
+            Mat () 
                 (Iden () "c") 
-                [Case (Name () "x") [Name () "a"] [ExpStmt (Iden () "y")]])
+                [Case (Name () "x") [Name () "a"] [ExpStmt (Iden () "y")]]
 
 test :: IO ()
 test = hspec test1

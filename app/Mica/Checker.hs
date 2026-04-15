@@ -4,12 +4,14 @@
 module Mica.Checker where 
 
 import Mica.Cute
-import Mica.Type 
+import Mica.Type
+import Control.Monad
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Foldable
 import Data.Map
 import Data.Text
+import Data.Maybe
 import Text.Megaparsec
 
 type SP = SourcePos 
@@ -38,12 +40,16 @@ instance Cute Note where
     cute (Note sp (Left msg)) = pack (sourcePosPretty sp) <> "\n" <> msg
     cute (Note sp (Right ex)) = pack (sourcePosPretty sp) <> " " <> cute ex
 
+instance Typed Note where 
+    typeof (Note _ (Right t)) = t 
+    typeof (Note _ (Left _)) = TBot
+
 willReturn :: Maybe (Exp ()) -> Checker ()
 willReturn rt = state (\st -> ((), st { returns = rt }))
 
 withNewReturnCtx :: Checker a -> Checker a 
 withNewReturnCtx ma = do 
-    r <- returns <$> get 
+    r <- gets returns
     willReturn Nothing
     a <- ma
     willReturn r
@@ -51,20 +57,20 @@ withNewReturnCtx ma = do
     
 scopedCtx :: Checker a -> Checker a 
 scopedCtx ma = do 
-    c <- context <$> get 
-    u <- uid <$> get  
+    c <- gets context 
+    u <- gets uid  
     a <- ma 
     state $ \s -> (a, s{ context = c, uid = u })
 
 scopedEnv :: Checker a -> Checker a 
 scopedEnv ma = do 
-    env <- environment <$> get 
+    env <- gets environment 
     a <- ma 
     state (\st -> (a, st{ environment = env }))
 
 lookupEnv :: Text -> Checker (Exp ()) 
 lookupEnv k = do 
-    env <- environment <$> get
+    env <- gets environment
     case Data.Map.lookup k env of 
         Just ex -> pure ex 
         Nothing -> throwError $ "type not found in environment for " <> k
@@ -77,10 +83,10 @@ insertCtx :: Text -> Exp () -> Checker (Exp ())
 insertCtx k ex = state $ \st -> 
     (ex, st{ context = Data.Map.insert k ex (context st) })
 
-inCtx :: Text -> Checker (Bool) 
-inCtx k = Data.Map.member k . context <$> get
+inCtx :: Text -> Checker Bool 
+inCtx k = gets (Data.Map.member k . context) 
 
-nextUId :: Checker (Int) 
+nextUId :: Checker Int 
 nextUId = state $ \st -> (uid st, st{ uid = uid st + 1 })
 
 mapTVs :: (a -> Text -> Exp a) -> Exp a -> Exp a 
@@ -88,7 +94,6 @@ mapTVs f (TVar a v) = f a v
 mapTVs f (Bin a op lx rx) = Bin a op (mapTVs f lx) (mapTVs f rx)
 mapTVs f (Una a op ex) = Una a op $ mapTVs f ex
 mapTVs f (Brack a ex) = Brack a $ mapTVs f ex
-mapTVs f (TLam a ex) = TLam a $ mapTVs f ex
 mapTVs _ ex = ex 
 
 foldTVs :: (p -> Text -> x -> x) -> Exp p -> x -> x
@@ -96,11 +101,10 @@ foldTVs f (TVar p v) = f p v
 foldTVs f (Bin _ _ lx rx) = foldTVs f rx . foldTVs f lx 
 foldTVs f (Una _ _ ex) = foldTVs f ex 
 foldTVs f (Brack _ ex) = foldTVs f ex 
-foldTVs f (TLam _ ex) = foldTVs f ex 
 foldTVs _ _ = id
 
 problems :: Exp Note -> [Note]
-problems ex = Data.Foldable.foldr folder [] ex
+problems = Data.Foldable.foldr folder []
     where 
         folder (Note sp (Right ex)) b = b 
         folder n@(Note _ (Left _)) b = n : b 
@@ -118,7 +122,7 @@ freshenTVar tvs tv = do
         False -> pure tv 
     where 
         doNext x tvs = nextUId >>= \n -> let tv' = tv <> pack (show n) in do
-            ctx <- context <$> get
+            ctx <- gets context
             if Data.Map.member tv' tvs || Data.Map.member tv' ctx
                 then doNext tv tvs 
                 else pure tv'
@@ -140,7 +144,7 @@ fresh :: a -> Checker (Exp a)
 fresh a = freshen (TVar a "x")
 
 findRoot :: Text -> Checker (Exp ()) 
-findRoot tv = (context <$> get) >>= \ctx -> case Data.Map.lookup tv ctx of 
+findRoot tv = gets context >>= \ctx -> case Data.Map.lookup tv ctx of 
     Just (TVar _ tv') -> if tv /= tv'
         then findRoot tv'
         else pure $ TVar () tv
@@ -151,7 +155,7 @@ occursChk :: Text -> Exp () -> Checker ()
 occursChk tv ex = foldTVs (\sp tv' m -> 
     if tv == tv' 
         then throwError $ "occurs checkExp " <> tv <> " = " <> tv'
-        else m >> pure ()) ex (pure ()) 
+        else void m) ex (pure ()) 
 
 bind :: Text -> Exp () -> Checker (Exp ())
 bind varName newTy = do
@@ -206,110 +210,101 @@ checkApp lx rx = throwError $
 annotate :: 
     SP -> 
     Text -> 
-    Checker (Exp Note, Exp ()) -> 
-    Checker (Exp Note, Exp ())
+    Checker (Exp Note) -> 
+    Checker (Exp Note)
 annotate sp msg ma = 
     let fullMsg e = e <> "\n" <> msg 
         stubify = Stub . Note sp . Left . fullMsg
-    in catchError ma $ \e -> pure (stubify e, TBot)
+    in catchError ma (pure . stubify)
 
-checkExp :: Exp SP -> Checker (Exp Note, Exp ())
+checkExp :: Exp SP -> Checker (Exp Note)
 checkExp (Iden sp v) = 
     annotate sp ("type for identifier (" <> v <> ") not found") $ do 
         ty <- lookupEnv v >>= freshen
-        pure (Iden (Note sp (Right ty)) v, ty)
+        pure $ Iden (Note sp (Right ty)) v
 
 checkExp ex@(IntLit sp v) = 
     let ty = Iden () "IntLike" in 
-    pure (IntLit (Note sp (Right ty)) v, ty)
+    pure $ IntLit (Note sp (Right ty)) v
 
 checkExp (DblLit sp v) = 
     let ty = Iden () "DblLike" in 
-    pure (DblLit (Note sp (Right ty)) v, ty)
+    pure $ DblLit (Note sp (Right ty)) v
 
 checkExp (StrLit sp v) = 
     let ty = Iden () "String" in
-    pure (StrLit (Note sp (Right ty)) v, ty)
+    pure $ StrLit (Note sp (Right ty)) v
 
 checkExp (CharLit sp v) = 
     let ty = Iden () "Char" in
-    pure (Iden (Note sp (Right ty)) (pack [v]), ty)
+    pure $ Iden (Note sp (Right ty)) (pack [v])
 
 checkExp (Brack sp ex) = do 
-    (ex', ty) <- checkExp ex 
-    pure (Brack (Note sp (Right ty)) ex', ty)
+    ex' <- checkExp ex 
+    let ty = Brack () (typeof ex')
+    pure $ Brack (Note sp (Right ty)) ex'
 
 checkExp (Bin sp op lx rx) = 
     annotate sp ("binary operator (" <> op <> ") failed to type check") $ do
-        ot <- lookupEnv op
-        (lx', lt) <- checkExp lx
-        (rx', rt) <- checkExp rx
-        tt <- checkApp ot lt
-        ty <- checkApp tt rt
-        pure (Bin (Note sp (Right ty)) op lx' rx', ty)
+        opTy <- lookupEnv op
+        lx' <- checkExp lx
+        rx' <- checkExp rx
+        tmpTy <- checkApp opTy (typeof lx')
+        resTy <- checkApp tmpTy (typeof rx')
+        pure $ Bin (Note sp (Right resTy)) op lx' rx'
 
-checkExp (Una sp op rx) = 
+checkExp (Una sp op ex) = 
     annotate sp ("unary operator (" <> op <> ") failed to type check") $ do
-        ot <- lookupEnv op
-        (rx', rt) <- checkExp rx
-        ty <- checkApp ot rt
-        pure (Una (Note sp (Right ty)) op rx', ty)
+        opTy <- lookupEnv op
+        ex' <- checkExp ex
+        apTy <- checkApp opTy (typeof ex')
+        pure $ Una (Note sp (Right apTy)) op ex'
 
-checkExp (Lam sp args bdy) = scopedEnv $ do 
+checkExp (Lam sp args body) = scopedEnv $ do 
     args' <- mapM checkArg args 
-    (bdy', rty) <- checkBody bdy
-    let lamTy = Bin () "-->" (argSig args') rty 
-    pure (Lam (Note sp (Right lamTy)) args' bdy', lamTy) 
+    body' <- checkBody body
+    let lamTy = Bin () "-->" (argSig (typeof <$> args')) (typeof body') 
+    pure $ Lam (Note sp (Right lamTy)) args' body'
 
 checkExp ex = throwError $ "could not type check expression " <> cute ex
 
-argSig :: [Arg Note] -> Exp () 
-argSig [Arg (Name (Note _ mty) _) _] = 
-    either (const TBot) id mty
-argSig (Arg (Name (Note _ mty) _) _ : bs) = 
-    Bin () "," (either (const TBot) id mty) (argSig bs)
+argSig :: [Exp ()] -> Exp () 
 argSig [] = TUnit
+argSig [ty] = ty
+argSig (a : bs) = Bin () "," a (argSig bs)
 
 checkArg :: Arg SP -> Checker (Arg Note) 
 checkArg (Arg (Name p n) Nothing) = do 
     t <- fresh () 
     insertEnv n t
-    pure $ Arg (Name (Note p $ Right t) n) Nothing 
+    pure $ Arg (Name (Note p $ Right t) n) Nothing
 checkArg (Arg (Name p n) (Just t)) = do 
-    (t', _) <- freshen t >>= checkExp 
-    let tyNeat = const () <$> t' 
+    t' <- freshen t >>= checkExp 
+    let tyNeat = void t' 
     insertEnv n tyNeat
     pure $ Arg (Name (Note p $ Right tyNeat) n) Nothing
 
-checkBody :: Body SP -> Checker (Body Note, Exp ())
-checkBody (Compound stmts) = do 
-    b <- Compound <$> mapM checkBlockStmt stmts 
-    r <- returns <$> get
-    case r of 
-        Just t -> pure (b, t) 
-        Nothing -> pure (b, TVoid) 
-checkBody (Inline e) = do 
-    (e', t) <- checkExp e 
-    pure (Inline e', t)
-
-formatMiss :: SP -> Exp SP -> Exp () -> Text -> Text 
-formatMiss sp exp ty msg = 
-    pack (sourcePosPretty sp) <> 
-    " " <> msg <> " " <> cute exp <> ":" <> cute ty
+checkBody :: Body SP -> Checker (Body Note)
+checkBody (Compound sp stmts) = withNewReturnCtx $ do 
+    stmts' <- mapM checkBlockStmt stmts
+    mRetTy <- gets returns
+    let retTy = fromMaybe TVoid mRetTy 
+    pure $ Compound (Note sp (Right retTy)) stmts'
+checkBody (Inline ex) = Inline <$> checkExp ex
 
 checkBlockStmt :: BlockStmt SP -> Checker (BlockStmt Note)
-checkBlockStmt (Ret sp (Just ex)) = returns <$> get >>= \case 
+checkBlockStmt (Ret sp (Just ex)) = gets returns >>= \case 
     Just rt -> do 
-        (ex', ty) <- checkExp ex 
-        rt' <- unify rt ty 
+        ex' <- checkExp ex 
+        rt' <- unify rt (typeof ex') 
         willReturn $ Just rt'
         pure $ Ret (Note sp $ Right TVoid) (Just ex')
     Nothing -> do
-        (ex', ty) <- checkExp ex 
-        willReturn $ Just ty 
+        ex' <- checkExp ex 
+        willReturn $ Just $ typeof ex' 
         pure $ Ret (Note sp $ Right TVoid) (Just ex')
 
-checkBlockStmt (Ret sp Nothing) = returns <$> get >>= \case 
+checkBlockStmt (Ret sp Nothing) = gets returns >>= \case 
     Just rt -> 
         let msg = pack (sourcePosPretty sp) <> 
                 " returned void instead of " <> cute rt 
@@ -318,48 +313,43 @@ checkBlockStmt (Ret sp Nothing) = returns <$> get >>= \case
         pure $ Ret (Note sp (Right TVoid)) Nothing
 
 checkBlockStmt (If sp cond stmts) = do 
-    (cond', cty) <- checkExp cond 
-    unify cty (Iden () "Bool")
+    cond' <- checkExp cond 
+    unify (typeof cond') (Iden () "Bool")
     stmts' <- mapM checkBlockStmt stmts 
     pure $ If (Note sp (Right TVoid)) cond' stmts'
 
 checkBlockStmt (While sp cond stmts) = do 
-    (cond', cty) <- checkExp cond 
-    unify cty (Iden () "Bool")
+    cond' <- checkExp cond 
+    unify (typeof cond') (Iden () "Bool")
     stmts' <- mapM checkBlockStmt stmts 
     pure $ While (Note sp (Right TVoid)) cond' stmts'
     
 checkBlockStmt (DoWhile sp stmts cond) = do 
-    (cond', cty) <- checkExp cond 
-    unify cty (Iden () "Bool") 
+    cond' <- checkExp cond 
+    unify (typeof cond') (Iden () "Bool") 
     stmts' <- mapM checkBlockStmt stmts 
     pure $ DoWhile (Note sp (Right TVoid)) stmts' cond'
 
 checkBlockStmt (For sp init cond inc stmts) = do 
-    (cond', cty) <- checkExp cond 
-    unify cty (Iden () "Bool") 
-    (init', _) <- checkExp init 
-    (inc', _) <- checkExp inc
+    cond' <- checkExp cond 
+    unify (typeof cond') (Iden () "Bool") 
+    init' <- checkExp init 
+    inc' <- checkExp inc
     stmts' <- mapM checkBlockStmt stmts  
     pure $ For (Note sp (Right TVoid)) init' cond' inc' stmts'
 
 checkBlockStmt (Else sp stmts) = 
     Else (Note sp (Right TVoid)) <$> mapM checkBlockStmt stmts 
 
-checkBlockStmt (Let sp a@(Arg (Name _ iden) Nothing) ex) = do 
-    fresh () >>= insertEnv iden
-    Let (Note sp (Right TVoid)) (notarize TVoid a) . fst <$> checkExp ex
+checkBlockStmt (Let sp arg ex) = 
+    Let (Note sp (Right TVoid)) <$> checkArg arg <*> checkExp ex
 
-checkBlockStmt (Let sp (Arg n@(Name nsp iden) (Just ty)) ex) = do 
-    ty' <- fmap (const ()) . fst <$> (freshen ty >>= checkExp)
-    insertEnv iden ty'
-    (ex', _) <- checkExp ex 
-    let arg' = Arg (Name (Note nsp $ Right ty') iden) Nothing
-    pure $ Let (Note sp (Right TVoid)) arg' ex' 
- 
-checkBlockStmt (ExpStmt ex) = ExpStmt . fst <$> checkExp ex
+checkBlockStmt (ExpStmt ex) = ExpStmt <$> checkExp ex
 
-checkBlockStmt (Mat sp cond cs) = undefined 
+checkBlockStmt (Mat sp cond cs) = do 
+    --(cx, cty) <- checkExp cond 
+    --unify cty $ Iden () "Bool"
+    undefined
 
 checkBlockStmt (Cont sp) = pure $ Cont $ Note sp $ Right TVoid
 checkBlockStmt (Brk sp) = pure $ Brk $ Note sp $ Right TVoid
@@ -371,12 +361,14 @@ checkFun :: FileStmt SP -> Checker (FileStmt SP)
 checkFun (Fun p n as bs) = undefined 
 
 checkFileStmt :: FileStmt SP -> Checker (FileStmt SP)
-checkFileStmt = undefined 
+checkFileStmt (Imp a s) = undefined 
+checkFileStmt (Inc a s) = undefined 
+checkFileStmt (Sum a n args injs) = undefined 
+checkFileStmt (Rec a n args mems) = undefined 
+checkFileStmt (Fun a n args bdy) = undefined 
+checkFileStmt (Dec a n ex) = undefined 
 
 precheckTy :: Exp SP -> Checker (Exp SP) 
-precheckTy (TLam sp ex) = 
-    TLam sp <$> 
-    precheckTy ex
 precheckTy (Bin sp op lx rx) = 
     Bin sp op <$> 
     precheckTy lx <*> 
@@ -387,9 +379,9 @@ precheckTy (Una sp op rx) =
 precheckTy (Brack sp ex) = 
     Brack sp <$> 
     precheckTy ex 
-precheckTy (TVoid) = 
+precheckTy TVoid = 
     pure TVoid
-precheckTy (Iden sp s) = environment <$> get >>= \en -> 
+precheckTy (Iden sp s) = gets environment >>= \en -> 
     if Data.Map.member s en
         then pure $ Iden sp s 
         else pure $ TVar sp s 
@@ -404,18 +396,16 @@ precheckTrm (Lam sp args (Inline exp)) =
     Lam sp <$> 
     mapM precheckArg args <*> 
     (Inline <$> precheckTrm exp)
-precheckTrm (Lam sp args (Compound stmts)) = 
-    Lam sp <$> 
+precheckTrm (Lam lsp args (Compound csp stmts)) = 
+    Lam lsp <$> 
     mapM precheckArg args <*> 
-    (Compound <$> mapM precheckBlockStmt stmts)
+    (Compound csp <$> mapM precheckBlockStmt stmts)
 precheckTrm (Bin sp op lx rx) = 
     Bin sp op <$> 
     precheckTrm lx <*> 
     precheckTrm rx 
 precheckTrm (Una sp op rx) = Una sp op <$> precheckTrm rx
 precheckTrm (Brack sp ex) = Brack sp <$> precheckTrm ex 
-precheckTrm (TLam sp _) = throwError $ 
-    pack (sourcePosPretty sp) <> " found TLam in term"
 precheckTrm (TVar sp _) = throwError $ 
     pack (sourcePosPretty sp) <> " found TVar in term"
 precheckTrm ex = pure ex 
@@ -455,22 +445,17 @@ precheckBlockStmt stmt = pure stmt
 precheckMemb :: Memb SP -> Checker (Memb SP) 
 precheckMemb (Memb n ex) = Memb n <$> precheckTy ex
 
+precheckInj :: Memb SP -> Checker (Inj SP) 
+precheckInj (Memb n ex) = Inj n <$> precheckTy ex
+
 precheckFileStmt :: FileStmt SP -> Checker (FileStmt SP) 
-precheckFileStmt (Sum sp n ns mems) = 
-    Sum sp n ns <$> 
-    mapM precheckMemb mems
-precheckFileStmt (Rec sp n ns mems) =
-    Rec sp n ns <$> 
-    mapM precheckMemb mems
+precheckFileStmt (Sum sp n ns mems) = undefined
+precheckFileStmt (Rec sp n ns mems) = undefined
 precheckFileStmt (Fun sp n args (Inline ex)) = 
     Fun sp n <$> 
     mapM precheckArg args <*> 
     (Inline <$> precheckTrm ex)
 precheckFileStmt (Dec sp n ex) = 
     Dec sp n <$> 
-    precheckTrm ex  
-precheckFileStmt (Def sp n arg ex) =
-    Def sp n <$> 
-    precheckArg arg <*> 
-    precheckTrm ex 
+    precheckTrm ex   
 precheckFileStmt stmt = pure stmt 

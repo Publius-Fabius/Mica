@@ -1,16 +1,15 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Mica.Parser where 
+module Mica.Parser where
 import Mica.Grouper
 import Mica.Lexer
 import Mica.Type
 import Text.Megaparsec
 import Data.Void
 import Data.Text
+import Data.Functor
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -43,8 +42,7 @@ pRawStrLit =
     
 pExpectOp :: Text -> Parser SP 
 pExpectOp op = 
-    token extract Set.empty <?> 
-    (unpack $ "expects operator " <> op)
+    token extract Set.empty <?> unpack ("expects operator " <> op)
     where 
         extract (LLeaf (LOp p op')) = if op == op' 
             then Just p 
@@ -53,8 +51,7 @@ pExpectOp op =
 
 pExpectIden :: Text -> Parser SP 
 pExpectIden iden = 
-    token extract Set.empty <?> 
-    (unpack $ "expects identifier " <> iden)
+    token extract Set.empty <?> unpack ("expects identifier " <> iden)
     where 
         extract (LLeaf (LId p iden')) = if iden == iden' 
             then Just p 
@@ -88,6 +85,14 @@ pCurly m = do
         extract (LCurly p as) = Just (p, as)
         extract _ = Nothing 
 
+pCurlySP :: (SP -> Parser a) -> Parser a
+pCurlySP m = do 
+    (p, as) <- token extract Set.empty <?> "LCurly"
+    recurse as (m p)
+    where 
+        extract (LCurly p as) = Just (p, as)
+        extract _ = Nothing 
+
 pBrack :: Parser a -> Parser a 
 pBrack m = do 
     (p, as) <- token extract Set.empty <?> "LBrack"
@@ -98,8 +103,8 @@ pBrack m = do
 
 isCtrlOp :: LexTree SP -> Bool 
 isCtrlOp (LLeaf (LOp _ ";")) = True 
-isCtrlOp (LLeaf (LOp _ "=>")) = True
-isCtrlOp (LLeaf (LOp _ "=")) = True
+isCtrlOp (LLeaf (LOp _ "=")) = True 
+isCtrlOp (LLeaf (LOp _ ",")) = True
 isCtrlOp _ = False
 
 liftPrimary :: MToken SP -> Parser (Exp SP) 
@@ -209,7 +214,7 @@ pArg = complexArg <|> simpleArg
 pBody :: Parser (Body SP) 
 pBody = compoundBody <|> inlineBody 
     where 
-        compoundBody = Compound <$> pCurly (many pBlockStmt)
+        compoundBody = pCurlySP $ \sp -> Compound sp <$> many pBlockStmt
         inlineBody = Inline <$> pExp <* pExpectOp ";"
 
 pBlock :: Parser [BlockStmt SP]
@@ -231,97 +236,110 @@ pCase :: Parser (Case SP)
 pCase = Case <$> 
     pIden Name <*> 
     many (pIden Name) <*>
-    (pExpectOp "=>" *> pBlock)
+    (pExpectOp "=" *> pBlock)
 
 pBlockStmt :: Parser (BlockStmt SP) 
-pBlockStmt = (lookAhead anySingle) >>= \case 
-    LLeaf (LId p "if")-> do 
-        anySingle
-        If p <$> pParen pExp <*> pBlock 
+pBlockStmt = 
+    let 
+        pIf = pExpectIden "if" >>= \p -> If p <$> pParen pExp <*> pBlock 
+        pElse = pExpectIden "else" >>= \p -> Else p <$> pBlock 
+        pWhile = pExpectIden "while" >>= \p -> 
+            While p <$> 
+                pParen pExp <*> 
+                pBlock
+        pDo = pExpectIden "do" >>= \p -> 
+            DoWhile p <$> 
+                pCurly (many pBlockStmt) <*>
+                (pExpectIden "while" *> pParen pExp) 
+        pRet = pExpectIden "return" >>= \p ->
+            Ret p <$> 
+                (optional pExp <* pExpectOp ";")
+        pCont = pExpectIden "continue" >>= \p -> Cont p <$ pExpectOp ";"
+        pBrk = pExpectIden "break" >>= \p -> Brk p <$ pExpectOp ";" 
+        pMat = pExpectIden "match" >>= \p -> 
+            Mat p <$> 
+                pParen pExp <*> 
+                pCurly (many pCase)
+        pLet = pExpectIden "let" >>= \p -> 
+            Let p <$> 
+                (pArg <* pExpectOp "=") <*> 
+                (pExp <* pExpectOp ";")
 
-    LLeaf (LId p "else") -> do 
-        anySingle
-        Else p <$> pBlock
-    
-    LLeaf (LId p "while") -> do 
-        anySingle
-        While p <$> pParen pExp <*> pBlock 
-    
-    LLeaf (LId p "do") -> do 
-        anySingle
-        DoWhile p <$> 
-            pCurly (many pBlockStmt) <*> 
-            (pExpectIden "while" *> pParen pExp)
-    
-    LLeaf (LId p "return") -> do 
-        anySingle
-        Ret p <$> optional pExp <* pExpectOp ";"
-    
-    LLeaf (LId p "continue") -> do 
-        anySingle
-        Cont p <$ pExpectOp ";"
-    
-    LLeaf (LId p "break") -> do 
-        anySingle
-        Brk p <$ pExpectOp ";"
-    
-    LLeaf (LId p "match") -> do 
-        anySingle
-        Mat p <$> pParen pExp <*> pCurly (many pCase) 
-
-    LLeaf (LId p "let") -> do 
-        anySingle
-        Let p <$> 
-            (pArg <* pExpectOp "=") <*> 
-            (pExp <* pExpectOp ";")
-
-    LLeaf (LId p "for") -> do 
-        anySingle
-        pFor p
-    
-    LCurly p bs -> fail "expected a block stmt, got a curly"
-
-    _ -> ExpStmt <$> pExp <* pExpectOp ";"
-
+        pForStmt = pExpectIden "for" >>= pFor
+        pExpSt = ExpStmt <$> pExp <* pExpectOp ";"
+    in 
+        (pIf <?> ("if statement"::String)) <|> 
+        (pElse <?> ("else statement"::String)) <|> 
+        (pWhile <?> ("while statement"::String)) <|> 
+        (pDo <?> ("do-while statement"::String)) <|> 
+        (pForStmt <?> ("for statement"::String)) <|> 
+        (pRet <?> ("return statement"::String)) <|> 
+        (pCont <?> ("continue statement"::String)) <|> 
+        (pBrk <?> ("break statement"::String)) <|> 
+        (pMat <?> ("match statement"::String)) <|> 
+        (pLet <?> ("let statement"::String)) <|> 
+        (pExpSt <?> ("expression statement"::String))
+ 
 pMemb :: Parser (Memb SP)
 pMemb = Memb <$> pIden Name <* pExpectOp ":" <*> pExp
 
+pInj :: Parser (Inj SP)
+pInj = Inj <$> pIden Name <* pExpectOp ":" <*> pExp
+
+pSpec :: Parser (Spe SP)
+pSpec =
+    let 
+        pStat = Static <$> pExpectIden "static"
+        pTL = ThreadLocal <$> pExpectIden "thread_local" 
+        pMut = Mutable <$> pExpectIden "mutable"
+        pNR = NoReturn <$> pExpectIden "no_return" 
+    in 
+        pStat <|> pTL <|> pMut <|> pNR
+  
 pFileStmt :: Parser (FileStmt SP)
-pFileStmt = anySingle >>= \ case
-
-    LLeaf (LId p "import") -> Imp p <$> pRawStrLit 
-
-    LLeaf (LId p "include") -> Inc p <$> pRawStrLit 
-
-    LLeaf (LId p "typesum") -> 
-        Sum p <$> 
-        pIden Name <*> 
-        many (pIden Name) <*> 
-        pCurly (pMemb `sepEndBy` pExpectOp ";") 
-
-    LLeaf (LId p "record") -> 
-        Rec p <$> 
-        pIden Name <*> 
-        many (pIden Name) <*> 
-        pCurly (pMemb `sepEndBy` pExpectOp ";") 
-
-    LLeaf (LId p "routine") -> 
-        Fun p <$> 
-        pIden Name <*> 
-        (pArg `sepBy` pExpectOp ",") <*>
-        (pExpectOp "=" *> pBody) 
-
-    LLeaf (LId p "declare") -> 
-        Dec p <$> 
-        (pIden Name <* pExpectOp ":") <*> 
-        (pExp <* pExpectOp ";") 
-
-    LLeaf (LId p "define") -> undefined
-
-    _ -> fail "expected a file statement"
+pFileStmt = 
+    let 
+        pImp = pExpectIden "import" >>= \p -> Imp p <$> pRawStrLit 
+        pInc = pExpectIden "include" >>= \p -> Inc p <$> pRawStrLit
+        pOpt ma = optional ma >>= \case
+            Just a -> pure $ Just a
+            Nothing -> pExpectOp ";" $> Nothing
+        pSum = pExpectIden "variant" >>= \p -> 
+            Sum p <$> 
+                pIden Name <*> 
+                (pExp <* pExpectOp "=") <*>
+                pOpt (pCurly $ pInj `sepEndBy` pExpectOp ";")
+        pRec = pExpectIden "record" >>= \p -> 
+            Rec p <$> 
+                pIden Name <*> 
+                (pExp <* pExpectOp "=") <*>
+                pOpt (pCurly $ pMemb `sepEndBy` pExpectOp ";")
+        pExt = pExpectIden "foreign" >>= \p -> 
+            Ext p <$> pIden Name <*> pExp <*> pRawStrLit
+        pDec specs name = 
+            Dec specs name <$> 
+                (pExpectOp ":" *> pExp) <* pExpectOp ";" 
+        pFun specs name = 
+            Fun specs name <$> 
+                pParen (pArg `sepBy` pExpectOp ",") <*> 
+                (pExpectOp "=" *> pBody) 
+        pTrm specs name = 
+            Trm specs name <$> 
+                (pExpectOp "=" *> pExp) <* pExpectOp ";"
+        pPoly = many pSpec >>= \s -> pIden Name >>= \n -> 
+            (pDec s n <?> ("type declaration"::String)) <|> 
+            (pFun s n <?> ("function definition"::String)) <|> 
+            (pTrm s n <?> ("term definition"::String))
+    in 
+        (pImp <?> ("import directive"::String)) <|> 
+        (pInc <?> ("include directive"::String)) <|> 
+        (pSum <?> ("variant definition"::String)) <|> 
+        (pRec <?> ("record defintion"::String)) <|> 
+        (pExt <?> ("foreign definition"::String)) <|> 
+        pPoly
 
 pMica :: Parser [FileStmt SP]
-pMica = (many pFileStmt) <* eof
+pMica = many pFileStmt <* eof
 
 prettyLexTree :: LexTree a -> Text 
 prettyLexTree (LParen _ ts) =
@@ -362,12 +380,13 @@ expOps = Map.fromList [
     (".", OpRec Binary 100 100),
     ("@", OpRec Prefix 95 95),
     ("_*", OpRec Prefix 95 95), 
+    ("-->", OpRec Binary 94 9),
     ("~", OpRec Prefix 90 90),
     ("_~", OpRec Prefix 90 90),
     ("!", OpRec Prefix 85 85),
     ("_!", OpRec Prefix 85 85),
     ("_+", OpRec Prefix 85 85),
-    ("_-", OpRec Prefix 85 85),
+    ("_-", OpRec Prefix 85 85), 
     ("**", OpRec Binary 85 84),
     (" ", OpRec Binary 80 80), 
     ("<<", OpRec Binary 75 75), 
@@ -387,9 +406,8 @@ expOps = Map.fromList [
     ("!=", OpRec Binary 30 30), 
     ("&&", OpRec Binary 20 20), 
     ("||", OpRec Binary 20 20), 
-    (",", OpRec Binary 15 15),
-    ("->", OpRec Binary 12 11),
-    ("$", OpRec Binary 10 10),
+    ("->", OpRec Binary 15 14),
+    (",", OpRec Binary 13 12),
     (":=", OpRec Binary 5 4),
     ("+=", OpRec Binary 5 4),
     ("-=", OpRec Binary 5 4),

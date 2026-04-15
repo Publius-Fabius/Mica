@@ -79,7 +79,7 @@ bFileStmt (Rec _ (Name _ name) kind mems) = do
             bEmit "    "
             bTy ty 
             bEmit $ " " <> name <> ";\n"
-bFileStmt (Fun _ (Name _ name) args (Compound stmts)) = undefined
+bFileStmt (Fun _ (Name _ name) args (Compound _ stmts)) = undefined
 
 
 --     Fun a (Name a) [Arg a] (Body a) | 

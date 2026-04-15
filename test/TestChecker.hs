@@ -31,7 +31,7 @@ mySt = ChkSt {
     returns = Nothing,
     uid = 0 }
 
-checks :: [Exp ()] -> Exp SP -> Checker (Exp Note, Exp ())
+checks :: [Exp ()] -> Exp SP -> Checker (Exp Note)
 checks es ex = do 
     mapM_ freshen es 
     checkExp ex  
@@ -39,12 +39,12 @@ checks es ex = do
 stripEx p = const () <$> p
 
 shouldChk ma b = case runExcept $ runStateT ma mySt of 
-    Right ((ex, a), st) -> do 
+    Right (ex, st) -> do 
         let ps = unpack $ Data.Text.intercalate "\n" (cute <$> problems ex)
         case ps of 
             [] -> pure () 
             _ -> putStrLn "" >> putStrLn ps
-        (stripEx a) `shouldBe` b
+        typeof ex `shouldBe` b
     Left err -> error (unpack err)
 
 test1 = do
@@ -75,7 +75,7 @@ test1 = do
                 Arg (Name ip "z") Nothing,
                 Arg (Name ip "p") Nothing
                 ] $ 
-            Compound [Ret ip $ Just $ Iden ip "var"]) 
+            Compound ip [Ret ip $ Just $ Iden ip "var"]) 
         `shouldChk` 
         Bin () "-->" (Bin () "," (TVar () "x") (TVar () "x0")) (Iden () "IntLike")
  

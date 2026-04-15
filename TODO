@@ -1,1 +1,43 @@
-import and include to name, value 
+##import and include to name, value 
+
+record Entry : * -> *;   // foward dec
+
+record Entry : * -> * = {
+    one : Int;
+    two : Int;
+}
+
+variant Maybe : * -> * = {
+    Just : a -> Maybe a;
+    Nothing : Maybe a;
+}
+
+static f : (Int, Int) -> Int;             // normal function declaration 
+f (x, y:Int) = x + y;                     // function definition 
+^     ^      
+|     |----Type annotation is allowed (already doing args with let anyway)
+|
+|-- No specifiers allowed 
+
+thread_local mutable fact : Int;
+fact = 1;
+
+Rec :: (Name a) (Exp a) (Maybe [Memb])       -- Can Be Forward Dec or Def 
+Sum :: (Name a) (Exp a) (Maybe [Inj])        -- No matter what, expect a kind
+Dec :: (Set Spec) (Name a) (Exp a) 
+Fun :: (Set Spec) (Name a) [Arg a] (Body a)
+Trm :: (Set Spec) (Name a) (Exp a)
+Ext :: (Name a) (Exp a) Text 
+
+extern Event : Kind = struct epoll_event;
+layout Event = { event : Int, data { ...etc... } };     
+
+(a --> b) == 16 Byte Fat Pointer (Closure)
+(a *-> b) == 8 Byte Function Pointer
+
+record :: Name (Maybe Kind) (Maybe RecordBody)
+variant :: Name (Maybe Kind) (Maybe VariantBody)
+fundef :: [Spec] Name [Name (Maybe Type)] (Maybe Term)
+trmdef :: [Spec] Name (Maybe Type) (Maybe Term)
+extern :: Name Type Term
+layout :: ...

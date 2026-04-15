@@ -4,6 +4,7 @@
 
 module Mica.Type where 
 
+import Data.Set
 import Data.Text
 import Mica.Cute
 
@@ -17,7 +18,6 @@ data Name a =
 
 data Exp a =
     TVar a Text |
-    TLam a (Exp a) |
     Iden a Text | 
     Lam a [Arg a] (Body a) | 
     Bin a Text (Exp a) (Exp a) | 
@@ -53,7 +53,7 @@ data Case a =
     deriving (Show, Eq, Ord, Functor, Foldable)
 
 data Body a = 
-    Compound [BlockStmt a] |
+    Compound a [BlockStmt a] |
     Inline (Exp a)
     deriving (Show, Eq, Ord, Functor, Foldable)
 
@@ -61,15 +61,63 @@ data Memb a =
     Memb (Name a) (Exp a)
     deriving (Show, Eq, Ord, Functor)
 
-data FileStmt a =
-    Imp a Text |
-    Inc a Text |
-    Sum a (Name a) [Name a] [Memb a] | 
-    Rec a (Name a) [Name a] [Memb a] | 
-    Fun a (Name a) [Arg a] (Body a) | 
-    Dec a (Name a) (Exp a) | 
-    Def a (Name a) (Arg a) (Exp a) 
+data Inj a = 
+    Inj (Name a) (Exp a)
     deriving (Show, Eq, Ord, Functor)
+
+data Spe a = 
+    Static a | 
+    ThreadLocal a | 
+    Mutable a | 
+    NoReturn a
+    deriving (Show, Eq, Ord, Functor)
+
+data Layout a = 
+    Scalar (Name a) (Exp a) |
+    Group a (Name a) [Layout a] |
+    Array a (Name a) Int [Layout a] 
+    deriving (Show, Eq, Ord, Functor)
+
+data FileStmt a =
+    Imp a Text | 
+    Inc a Text | 
+    Sum a (Name a) (Exp a) (Maybe [Inj a]) |
+    Rec a (Name a) (Exp a) (Maybe [Memb a]) | 
+    Dec [Spe a] (Name a) (Exp a) |
+    Fun [Spe a] (Name a) [Arg a] (Body a) | 
+    Trm [Spe a] (Name a) (Exp a) |
+    Ext a (Name a) (Exp a) Text |
+    Lay a (Name a) (Layout a)
+    deriving (Show, Eq, Ord, Functor)
+
+class Typed a where 
+    typeof :: a -> Exp () 
+
+instance Typed a => Typed (Exp a) where 
+    typeof TStar = TStar
+    typeof TUnit = TStar
+    typeof (TVar _ _) = TStar 
+    typeof (Iden n _) = typeof n
+    typeof (Lam n _ _) = typeof n
+    typeof (Bin n _ _ _) = typeof n
+    typeof (Una n _ _) = typeof n
+    typeof (IntLit n _) = typeof n
+    typeof (DblLit n _) = typeof n 
+    typeof (StrLit n _) = typeof n 
+    typeof (CharLit n _) = typeof n 
+    typeof (Brack n _) = typeof n 
+    typeof (Stub n) = typeof n
+    typeof TVoid = TBot
+
+instance Typed a => Typed (Body a) where 
+    typeof (Compound n _) = typeof n 
+    typeof (Inline ex) = typeof ex
+
+instance Typed a => Typed (Name a) where 
+    typeof (Name n _) = typeof n
+
+instance Typed a => Typed (Arg a) where 
+    typeof (Arg n _) = typeof n 
 
 instance Cute (Name a) where 
     cute (Name _ a) = a
@@ -80,7 +128,6 @@ instance Cute (Arg a) where
 
 instance Cute (Exp a) where 
     cute (TVar _ v) = v
-    cute (TLam _ ex) = cute ex 
     cute (Iden _ i) = i 
     cute (Bin _ op lx rx) = 
         "(" <> cute lx <> " " <> op <> " " <> cute rx <> ")"
@@ -94,10 +141,10 @@ instance Cute (Exp a) where
     cute (CharLit _ v) = pack $ show v
     cute TVoid = "Void"
     cute (Stub _) = "???"
-    cute (TBot) = "_|_"
+    cute TBot = "_|_"
 
 instance Cute (Body a) where 
-    cute (Compound stmts) = 
+    cute (Compound _ stmts) = 
         let stmts' = Data.Text.unwords (cute <$> stmts) 
         in "{" <> stmts' <> "}" 
     cute (Inline ex) = cute ex <> ";" 
@@ -138,20 +185,22 @@ instance Cute (BlockStmt a) where
 instance Cute (Memb a) where 
     cute (Memb n ex) = cute n <> " : " <> cute ex <> ";"
 
+instance Cute (Inj a) where 
+    cute (Inj n ex) = cute n <> " : " <> cute ex <> ";"
+
 instance Cute (FileStmt a) where 
     cute (Imp _ t) = "import " <> t <> ";" 
     cute (Inc _ t) = "include " <> t <> ";" 
     cute (Sum _ n ki mems) = 
-        let mems' = Data.Text.unwords (cute <$> mems) 
-            ki' = Data.Text.unwords (cute <$> ki) 
+        let mems' = maybe "" (Data.Text.unwords . fmap cute) mems
+            ki' = cute ki
         in "typesum " <> cute n <> " " <> ki' <> " {" <> mems' <> "}"
     cute (Rec _ n ki mems) = 
-        let mems' = Data.Text.unwords (cute <$> mems) 
-            ki' = Data.Text.unwords (cute <$> ki) 
+        let mems' = maybe "" (Data.Text.unwords . fmap cute) mems
+            ki' = cute ki 
         in "record " <> cute n <> " " <> ki' <> " {" <> mems' <> "}"
     cute (Fun _ n as b) = 
         let as' = Data.Text.unwords (cute <$> as) 
         in "routine " <> cute n <> " " <> as' <> " = " <> cute b 
     cute (Dec _ n ex) = "declare " <> cute n <> " : " <> cute ex <> ";"
-    cute (Def _ n a b) = "define " <> cute n <> "?????"
 
