@@ -15,20 +15,21 @@ import Data.Text
 ip = initialPos "TestChecker.hs"
 
 arr = Bin () "->"
-tv = TVar () 
+tv = Var () 
 iden = Iden () 
 
-mySt = ChkSt { 
+mySt = newChkSt { 
     environment = Data.Map.fromList [
-        (" ", ((tv "a" `arr` tv "b") `arr` (tv "a" `arr` tv "b"))),
-        ("+", (tv "n" `arr` (tv "n" `arr` tv "n"))),
-        ("!", tv "y" `arr` tv "y"),
-        ("?", tv "x" `arr` (Bin () " " (iden "Maybe") (tv "x"))),
-        ("var", iden "IntLike")
+        (" ", (ip, (tv "a" `arr` tv "b") `arr` (tv "a" `arr` tv "b"))),
+        ("+", (ip, tv "n" `arr` (tv "n" `arr` tv "n"))),
+        ("!", (ip, tv "y" `arr` tv "y")),
+        ("?", (ip, tv "x" `arr` (Bin () " " (iden "Maybe") (tv "x")))),
+        ("var", (ip, iden "IntLike"))
     ],
     Mica.Checker.context = Data.Map.fromList [
     ],
     returns = Nothing,
+    provenance = Data.Map.empty,
     uid = 0 }
 
 checks :: [Exp ()] -> Exp SP -> Checker (Exp Note)
@@ -49,24 +50,24 @@ shouldChk ma b = case runExcept $ runStateT ma mySt of
 
 test1 = do
     it "type checks a basic int" $ 
-        checkExp (IntLit ip 3) `shouldChk` (Iden () "IntLike")
+        checkExp (IntLit ip 3) `shouldChk` Iden () "IntLike"
     it "type checks an operator in the enviroment" $
         checks [] 
-        (Iden ip "!") `shouldChk` Bin () "->" (TVar () "y") (TVar () "y")
+        (Iden ip "!") `shouldChk` Bin () "->" (Var () "y") (Var () "y")
     it "freshens an operators parameters when introduced into the context" $
         checks [tv "y"] 
-        (Iden ip "!") `shouldChk` Bin () "->" (TVar () "y0") (TVar () "y0")
+        (Iden ip "!") `shouldChk` Bin () "->" (Var () "y0") (Var () "y0")
     it "type checks simple unary application" $ 
         checks [] (Una ip "!" (Iden ip "var")) `shouldChk` (Iden () "IntLike")
     it "type checks partial application" $ 
         checks [] (Una ip "+" (Iden ip "var")) `shouldChk` 
-        (Bin () "->" (Iden () "IntLike") (Iden () "IntLike"))
+        Bin () "->" (Iden () "IntLike") (Iden () "IntLike")
     it "it simplifies a unary with a kind variable" $ 
         checks [] (Una ip "?" (Iden ip "var")) `shouldChk` 
-        (Bin () " " (Iden () "Maybe") (Iden () "IntLike"))
+        Bin () " " (Iden () "Maybe") (Iden () "IntLike")
     it "type checks a one app step" $ 
         checks [] (Una ip " " (Iden ip "+")) `shouldChk`
-        (Bin () "->" (TVar () "n") (Bin () "->" (TVar () "n") (TVar () "n")))
+        Bin () "->" (Var () "a") (Bin () "->" (Var () "a") (Var () "a"))
     it "type checks a full app" $ 
         checks [] (Bin ip " " (Iden ip "+") (Iden ip "var")) `shouldChk` 
         Bin () "->" (Iden () "IntLike") (Iden () "IntLike")
@@ -77,7 +78,7 @@ test1 = do
                 ] $ 
             Compound ip [Ret ip $ Just $ Iden ip "var"]) 
         `shouldChk` 
-        Bin () "-->" (Bin () "," (TVar () "x") (TVar () "x0")) (Iden () "IntLike")
+        Bin () "-->" (Bin () "," (Var () "x") (Var () "x0")) (Iden () "IntLike")
  
 test :: IO () 
 test = hspec test1

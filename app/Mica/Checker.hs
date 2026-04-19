@@ -5,28 +5,34 @@ module Mica.Checker where
 
 import Mica.Cute
 import Mica.Type
+import Data.Functor 
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Foldable
 import Data.Map
-import Data.Text
+import Data.Text as T
 import Data.Maybe
+import Data.Char
 import Text.Megaparsec
+import qualified Data.List as L
 
 type SP = SourcePos 
-
 type SymTbl a = Map Text a 
 
 data ChkSt = ChkSt {
-    uid :: Int, 
-    context :: SymTbl (Exp ()),           -- types to types
-    environment :: SymTbl (Exp ()),       -- terms to types
-    returns :: Maybe (Exp ())             -- Return type
+    uid :: Int,
+    provenance :: SymTbl SP,
+    registry :: SymTbl (SP, Meta),
+    context :: SymTbl (Exp ()),
+    environment :: SymTbl (SP, Exp ()),
+    returns :: Maybe (Exp ())
 } deriving (Show)
 
 newChkSt = ChkSt { 
     uid = 0,
+    provenance = Data.Map.empty,
+    registry = Data.Map.empty,
     context = Data.Map.empty, 
     environment = Data.Map.empty,
     returns = Nothing }
@@ -66,22 +72,51 @@ scopedEnv :: Checker a -> Checker a
 scopedEnv ma = do 
     env <- gets environment 
     a <- ma 
-    state (\st -> (a, st{ environment = env }))
+    state $ \st -> (a, st{ environment = env })
+
+scopedPro :: Checker a -> Checker a 
+scopedPro ma = do 
+    pro <- gets provenance 
+    a <- ma 
+    state $ \st -> (a, st{ provenance = pro })
 
 lookupEnv :: Text -> Checker (Exp ()) 
-lookupEnv k = do 
-    env <- gets environment
-    case Data.Map.lookup k env of 
-        Just ex -> pure ex 
-        Nothing -> throwError $ "type not found in environment for " <> k
+lookupEnv t = do 
+    env <- gets environment 
+    case Data.Map.lookup t env of 
+        Just (_,ex) -> pure ex 
+        Nothing -> throwError $ 
+            "symbol (" <> t <> ") not found in the environment" 
 
-insertEnv :: Text -> Exp () -> Checker (Exp ()) 
-insertEnv k ex = state $ \st -> 
-    (ex, st{ environment = Data.Map.insert k ex $ environment st })
+symbolsCollide :: SP -> SP -> Text -> Text 
+symbolsCollide p1 p2 sym = 
+    pack (sourcePosPretty p1) <> 
+    "\nsymbol (" <> sym <> ") collides with another symbol introduced at:\n" <>
+    pack (sourcePosPretty p2)
+
+insertEnv :: SP -> Text -> Exp () -> Checker (Exp ()) 
+insertEnv p1 t ex = do 
+    env <- gets environment 
+    case Data.Map.lookup t env of 
+        Just (p2, _) -> throwError $ symbolsCollide p1 p2 t
+        Nothing -> state $ \st -> (ex, st { environment = 
+            Data.Map.insert t (p1, ex) (environment st) })
+
+insertPro :: SP -> Text -> Checker SP 
+insertPro p1 t = do 
+    pro <- gets provenance 
+    case Data.Map.lookup t pro of 
+        Just p2 -> throwError $ symbolsCollide p1 p2 t
+        Nothing -> state $ \st -> (p1, st { provenance = 
+            Data.Map.insert t p1 (provenance st) })
 
 insertCtx :: Text -> Exp () -> Checker (Exp ()) 
 insertCtx k ex = state $ \st -> 
     (ex, st{ context = Data.Map.insert k ex (context st) })
+
+insertReg :: SP -> Text -> Meta -> Checker () 
+insertReg sp k fs = state $ \st -> 
+    ((), st{ registry = Data.Map.insert k (sp, fs) (registry st) })
 
 inCtx :: Text -> Checker Bool 
 inCtx k = gets (Data.Map.member k . context) 
@@ -89,121 +124,123 @@ inCtx k = gets (Data.Map.member k . context)
 nextUId :: Checker Int 
 nextUId = state $ \st -> (uid st, st{ uid = uid st + 1 })
 
-mapTVs :: (a -> Text -> Exp a) -> Exp a -> Exp a 
-mapTVs f (TVar a v) = f a v
-mapTVs f (Bin a op lx rx) = Bin a op (mapTVs f lx) (mapTVs f rx)
-mapTVs f (Una a op ex) = Una a op $ mapTVs f ex
-mapTVs f (Brack a ex) = Brack a $ mapTVs f ex
-mapTVs _ ex = ex 
+mapVars :: ExpTransform m => (a -> Text -> Exp a) -> m a -> m a 
+mapVars f = mapx mapper where 
+    mapper (Var p v) = f p v 
+    mapper x = x 
 
-foldTVs :: (p -> Text -> x -> x) -> Exp p -> x -> x
-foldTVs f (TVar p v) = f p v
-foldTVs f (Bin _ _ lx rx) = foldTVs f rx . foldTVs f lx 
-foldTVs f (Una _ _ ex) = foldTVs f ex 
-foldTVs f (Brack _ ex) = foldTVs f ex 
-foldTVs _ _ = id
+foldVars :: ExpTransform m => (p -> Text -> x -> x) -> m p -> x -> x
+foldVars f = foldx folder where 
+    folder (Var p v) s = f p v s 
+    folder _ s = s 
 
-problems :: Exp Note -> [Note]
-problems = Data.Foldable.foldr folder []
-    where 
-        folder (Note sp (Right ex)) b = b 
-        folder n@(Note _ (Left _)) b = n : b 
+mapIdens :: ExpTransform m => (a -> Text -> Exp a) -> m a -> m a 
+mapIdens f = mapx mapper where 
+    mapper (Iden p v) = f p v
+    mapper x = x
+
+foldIdens :: ExpTransform m => (p -> Text -> x -> x) -> m p -> x -> x
+foldIdens f = foldx folder where 
+    folder (Iden p v) s = f p v s 
+    folder _ s = s 
+
+problems :: Foldable m => m Note -> [Note]
+problems = Data.Foldable.foldr folder [] where 
+    folder (Note sp (Right ex)) b = b 
+    folder n@(Note _ (Left _)) b = n : b 
 
 notarize :: Functor f => Exp () -> f SP -> f Note
 notarize ex = fmap (\sp -> Note sp (Right ex)) 
 
-getTVars :: Exp a -> SymTbl Text
-getTVars ex = foldTVs (\ _ tv -> Data.Map.insert tv tv) ex Data.Map.empty    
+getVars :: Exp a -> SymTbl Text
+getVars ex = foldVars folder ex Data.Map.empty where 
+    folder _ tv = Data.Map.insert tv tv 
 
-freshenTVar :: SymTbl Text -> Text -> Checker Text 
-freshenTVar tvs tv = do 
+freshenVar :: SymTbl Text -> Text -> Checker Text 
+freshenVar tvs tv =  
     inCtx tv >>= \case 
-        True -> doNext tv tvs 
+        True -> getNext 
         False -> pure tv 
     where 
-        doNext x tvs = nextUId >>= \n -> let tv' = tv <> pack (show n) in do
+        getNext = do 
+            nxt <- nextUId 
             ctx <- gets context
+            let tv' = tv <> pack (show nxt)
             if Data.Map.member tv' tvs || Data.Map.member tv' ctx
-                then doNext tv tvs 
+                then getNext 
                 else pure tv'
-            
+ 
 freshenSymTbl :: SymTbl Text -> Checker (SymTbl Text) 
-freshenSymTbl tvs = mapM (freshenTVar tvs) tvs 
+freshenSymTbl tvs = mapM (freshenVar tvs) tvs 
 
 freshen :: Exp a -> Checker (Exp a)
 freshen ex = do 
-    tvs <- freshenSymTbl (getTVars ex) 
-    mapM_ (\tv -> insertCtx tv (TVar () tv)) tvs 
-    pure $ mapTVs (apply tvs) ex
+    tvs <- freshenSymTbl (getVars ex)
+    forM_ tvs $ \tv -> insertCtx tv $ Var () T.empty  
+    pure $ mapVars (apply tvs) ex
     where 
         apply tvs p tv = case Data.Map.lookup tv tvs of
-            (Just tv') -> TVar p tv' 
-            Nothing -> TVar p tv
+            (Just tv') -> Var p tv' 
+            Nothing -> Var p tv
  
 fresh :: a -> Checker (Exp a) 
-fresh a = freshen (TVar a "x")
+fresh a = freshen (Var a "x")
 
-findRoot :: Text -> Checker (Exp ()) 
-findRoot tv = gets context >>= \ctx -> case Data.Map.lookup tv ctx of 
-    Just (TVar _ tv') -> if tv /= tv'
-        then findRoot tv'
-        else pure $ TVar () tv
-    Just ex -> pure ex
-    Nothing -> pure $ TVar () tv
+findRoot :: Text -> SymTbl (Exp ()) -> Exp ()
+findRoot tv ctx = case Data.Map.lookup tv ctx of 
+    Just (Var () tv') -> if tv' /= T.empty
+        then findRoot tv' ctx
+        else Var () tv
+    Just ex -> ex
+    Nothing -> Var () tv
 
 occursChk :: Text -> Exp () -> Checker ()
-occursChk tv ex = foldTVs (\sp tv' m -> 
-    if tv == tv' 
-        then throwError $ "occurs checkExp " <> tv <> " = " <> tv'
-        else void m) ex (pure ()) 
+occursChk tv ex = foldVars folder ex (pure ()) where 
+    folder _ tv' m = if tv == tv' 
+        then throwError ("occurs checkExp " <> tv <> " |- " <> cute ex)
+        else m :: Checker () 
 
 bind :: Text -> Exp () -> Checker (Exp ())
 bind varName newTy = do
-    simpTy <- subst newTy 
-    root <- findRoot varName 
-    case root of 
-        (TVar _ tv) -> do 
+    ctx <- gets context 
+    let simpTy = subst newTy ctx 
+    case findRoot varName ctx of 
+        (Var _ tv) -> do 
             occursChk tv simpTy 
             insertCtx tv simpTy
-        _ -> 
-            root `unify` simpTy
+        root -> unify root simpTy
 
 unify :: Exp () -> Exp () -> Checker (Exp ())
 unify (Iden _ lv) (Iden _ rv) = if lv == rv 
     then pure (Iden () lv)
     else throwError $ "could not unify iden " <> lv <> " with " <> rv
 
-unify (TVar _ lv) rx = bind lv rx
-unify lx (TVar _ rv) = bind rv lx
+unify lx (Var _ rv) = bind rv lx
+unify (Var _ lv) rx = bind lv rx
 
-unify (Bin sp lo ll lr) (Bin _ ro rl rr) = if lo == ro
-    then Bin sp ro <$> unify ll rl <*> unify lr rr 
+unify (Bin _ lo ll lr) (Bin _ ro rl rr) = if lo == ro
+    then Bin () ro <$> unify ll rl <*> unify lr rr 
     else throwError $ "could not unify operator " <> lo <> " with " <> ro
 
-unify (Una lp lo lr) (Una rp ro rr) = if lo == ro 
-    then Una rp ro <$> unify lr rr 
+unify (Una _ lo lr) (Una _ ro rr) = if lo == ro 
+    then Una () ro <$> unify lr rr 
     else throwError $ "could not unify operator " <> lo <> " with " <> ro
 
-unify (Brack lp lx) (Brack rp rx) = unify lx rx
+unify (Brack _ lx) (Brack _ rx) = unify lx rx
 
 unify lx rx = throwError $ 
     "could not unify " <> cute lx <> " with " <> cute rx
 
-subst :: Exp () -> Checker (Exp ()) 
-subst (TVar () tv) = do
-    root <- findRoot tv 
-    case root of 
-        TVar _ _' -> pure root
-        ex -> subst ex 
-subst (Una sp op rx) = Una sp op <$> subst rx 
-subst (Bin sp op lx rx) =  Bin sp op <$> subst lx <*> subst rx 
-subst (Brack sp x) = Brack sp <$> subst x  
-subst ex = pure ex
-
+subst :: Exp () -> SymTbl (Exp ()) -> Exp () 
+subst ex ctx = mapVars mapper ex where
+    mapper _ tv = case findRoot tv ctx of 
+        Var p v -> Var p v
+        nxt -> subst nxt ctx
+    
 checkApp :: Exp () -> Exp () -> Checker (Exp ())
 checkApp (Bin _ "->" dom cod) vty = do 
     unify dom vty
-    subst cod 
+    gets (subst cod . context) 
 checkApp lx rx = throwError $
     "could not apply type " <> cute rx <> " to non-function type " <> cute lx 
 
@@ -218,12 +255,18 @@ annotate sp msg ma =
     in catchError ma (pure . stubify)
 
 checkExp :: Exp SP -> Checker (Exp Note)
-checkExp (Iden sp v) = 
-    annotate sp ("type for identifier (" <> v <> ") not found") $ do 
-        ty <- lookupEnv v >>= freshen
-        pure $ Iden (Note sp (Right ty)) v
 
-checkExp ex@(IntLit sp v) = 
+checkExp (Iden sp v) = annotate sp "" $ do 
+    -- Lookup symbol and freshen into substitution context.
+    ty <- lookupEnv v >>= freshen 
+    pure $ Iden (Note sp (Right ty)) v
+
+checkExp (Var sp v) = annotate sp "" $ do
+    -- Lookup already fresh var. 
+    ty <- lookupEnv v 
+    pure $ Var (Note sp (Right ty)) v
+
+checkExp (IntLit sp v) = 
     let ty = Iden () "IntLike" in 
     pure $ IntLit (Note sp (Right ty)) v
 
@@ -273,16 +316,38 @@ argSig [] = TUnit
 argSig [ty] = ty
 argSig (a : bs) = Bin () "," a (argSig bs)
 
+skolemize :: [Text] -> Exp a -> Exp a 
+skolemize ubis = mapIdens mapper 
+    where 
+        mapper p i = if i `L.elem` ubis 
+            then Var p i
+            else Iden p i
+
+unboundIdens :: Exp SP -> Checker [(SP, Text)] 
+unboundIdens ex = do 
+    let idens = L.nubBy (\a b -> snd a == snd b) $ 
+            foldIdens (\a t x -> (a, t) : x) ex [] 
+    let folder x (p, t) = gets environment >>= \env -> 
+            if Data.Map.member t env
+                then pure x :: Checker [(SP, Text)]
+                else pure $ (p, t) : x
+    foldM folder [] idens 
+
 checkArg :: Arg SP -> Checker (Arg Note) 
 checkArg (Arg (Name p n) Nothing) = do 
     t <- fresh () 
-    insertEnv n t
+    insertEnv p n t
     pure $ Arg (Name (Note p $ Right t) n) Nothing
-checkArg (Arg (Name p n) (Just t)) = do 
-    t' <- freshen t >>= checkExp 
-    let tyNeat = void t' 
-    insertEnv n tyNeat
-    pure $ Arg (Name (Note p $ Right tyNeat) n) Nothing
+checkArg (Arg (Name np n) (Just t)) = do 
+    ubis <- unboundIdens t
+    t' <- scopedEnv $ do 
+        forM_ ubis $ \(ip, i) -> do 
+            iTy <- fresh () 
+            insertEnv ip i iTy 
+        skolemize (snd <$> ubis) . void <$> checkExp t
+    tyNeat <- freshen t' 
+    insertEnv np n tyNeat 
+    pure $ Arg (Name (Note np $ Right tyNeat) n) Nothing 
 
 checkBody :: Body SP -> Checker (Body Note)
 checkBody (Compound sp stmts) = withNewReturnCtx $ do 
@@ -368,94 +433,148 @@ checkFileStmt (Rec a n args mems) = undefined
 checkFileStmt (Fun a n args bdy) = undefined 
 checkFileStmt (Dec a n ex) = undefined 
 
-precheckTy :: Exp SP -> Checker (Exp SP) 
-precheckTy (Bin sp op lx rx) = 
-    Bin sp op <$> 
-    precheckTy lx <*> 
-    precheckTy rx 
-precheckTy (Una sp op rx) = 
-    Una sp op <$> 
-    precheckTy rx 
-precheckTy (Brack sp ex) = 
-    Brack sp <$> 
-    precheckTy ex 
-precheckTy TVoid = 
-    pure TVoid
-precheckTy (Iden sp s) = gets environment >>= \en -> 
-    if Data.Map.member s en
-        then pure $ Iden sp s 
-        else pure $ TVar sp s 
-precheckTy _ = throwError "Found term in type"
+-- preBody :: Body SP -> Checker (Body SP) 
+-- preBody (Inline ex) = Inline <$> preTrm ex 
+-- preBody (Compound sp stmts) = Compound sp <$> mapM preBlockStmt stmts
+--
+-- startsWithLower :: Text -> Bool 
+-- startsWithLower t = isLower $ Data.Text.head t 
+--
+-- preTy :: Exp SP -> Checker (Exp SP) 
+-- preTy (Bin sp op lx rx) = Bin sp op <$> preTy lx <*> preTy rx 
+-- preTy (Una sp op rx) = Una sp op <$> preTy rx 
+-- preTy (Brack sp ex) = Brack sp <$> preTy ex 
+-- preTy (Iden p s) = if startsWithLower s 
+--     then pure $ Var p s 
+--     else pure $ Iden p s 
+-- preTy t = pure t
 
-precheckArg :: Arg SP -> Checker (Arg SP)
-precheckArg (Arg n (Just ty)) = Arg n . Just <$> precheckTy ty 
-precheckArg (Arg n Nothing) = pure (Arg n Nothing)
+-- preArg :: Arg SP -> Checker (Arg SP)
+-- preArg (Arg n mt) = Arg <$> 
+--     preBindName n <*> 
+--     maybe (pure Nothing) (fmap Just . preTy) mt 
 
-precheckTrm :: Exp SP -> Checker (Exp SP) 
-precheckTrm (Lam sp args (Inline exp)) = 
-    Lam sp <$> 
-    mapM precheckArg args <*> 
-    (Inline <$> precheckTrm exp)
-precheckTrm (Lam lsp args (Compound csp stmts)) = 
-    Lam lsp <$> 
-    mapM precheckArg args <*> 
-    (Compound csp <$> mapM precheckBlockStmt stmts)
-precheckTrm (Bin sp op lx rx) = 
-    Bin sp op <$> 
-    precheckTrm lx <*> 
-    precheckTrm rx 
-precheckTrm (Una sp op rx) = Una sp op <$> precheckTrm rx
-precheckTrm (Brack sp ex) = Brack sp <$> precheckTrm ex 
-precheckTrm (TVar sp _) = throwError $ 
-    pack (sourcePosPretty sp) <> " found TVar in term"
-precheckTrm ex = pure ex 
+-- preTrm :: Exp SP -> Checker (Exp SP) 
+-- preTrm (Lam sp args body) = Lam sp <$> mapM preArg args <*> preBody body 
+-- preTrm (Bin sp op lx rx) = Bin sp op <$> preTrm lx <*> preTrm rx 
+-- preTrm (Una sp op rx) = Una sp op <$> preTrm rx
+-- preTrm (Brack sp ex) = Brack sp <$> preTrm ex 
+-- preTrm ex = pure ex 
+--
+alreadyDefined :: SP -> SP -> Text -> Text 
+alreadyDefined sa sb n = 
+    pack (sourcePosPretty sa) <> 
+    "\nsymbol (" <> n <> ") was already defined at:\n" <>
+    pack (sourcePosPretty sb) 
 
-precheckBlockStmt :: BlockStmt SP -> Checker (BlockStmt SP)
-precheckBlockStmt (If sp ex stmts) = 
-    If sp <$> 
-    precheckTrm ex <*> 
-    mapM precheckBlockStmt stmts
-precheckBlockStmt (Else sp stmts) = 
-    Else sp <$> 
-    mapM precheckBlockStmt stmts
-precheckBlockStmt (While sp ex stmts) = 
-    While sp <$> 
-    precheckTrm ex <*> 
-    mapM precheckBlockStmt stmts 
-precheckBlockStmt (DoWhile sp stmts ex) = 
-    DoWhile sp <$> 
-    mapM precheckBlockStmt stmts <*> 
-    precheckTrm ex 
-precheckBlockStmt (For sp init cond inc stmts) = 
-    For sp <$> 
-    precheckTrm init <*> 
-    precheckTrm cond <*> 
-    precheckTrm inc <*> 
-    mapM precheckBlockStmt stmts
-precheckBlockStmt (Ret sp (Just ex)) = 
-    Ret sp . Just <$> precheckTrm ex
-precheckBlockStmt (Let sp arg ex) = 
-    Let sp <$> precheckArg arg <*> precheckTrm ex
-precheckBlockStmt (Mat sp ex cs) = 
-    Mat sp <$> precheckTrm ex <*> undefined 
-precheckBlockStmt (ExpStmt ex) = 
-    ExpStmt <$> precheckTrm ex  
-precheckBlockStmt stmt = pure stmt 
+arityMismatch :: SP -> SP -> Text -> Text 
+arityMismatch sa sb n =
+    pack (sourcePosPretty sa) <> 
+    "\narity of symbol (" <> n <> ") did not match declaration at:\n" <>
+    pack (sourcePosPretty sb)
 
-precheckMemb :: Memb SP -> Checker (Memb SP) 
-precheckMemb (Memb n ex) = Memb n <$> precheckTy ex
+alreadyDeclared :: SP -> SP -> Text -> Text 
+alreadyDeclared sa sb n = 
+    pack (sourcePosPretty sa) <> 
+    "\nsymbol (" <> n <> ") was already declared at:\n" <>
+    pack (sourcePosPretty sb)
 
-precheckInj :: Memb SP -> Checker (Inj SP) 
-precheckInj (Memb n ex) = Inj n <$> precheckTy ex
+specifierMismatch :: SP -> SP -> Text -> Text 
+specifierMismatch sa sb n = 
+    pack (sourcePosPretty sa) <> 
+    "\nspecifiers for symbol (" <> n <> ") don't match those declared at:\n" <>
+    pack (sourcePosPretty sb)
 
-precheckFileStmt :: FileStmt SP -> Checker (FileStmt SP) 
-precheckFileStmt (Sum sp n ns mems) = undefined
-precheckFileStmt (Rec sp n ns mems) = undefined
-precheckFileStmt (Fun sp n args (Inline ex)) = 
-    Fun sp n <$> 
-    mapM precheckArg args <*> 
-    (Inline <$> precheckTrm ex)
-precheckFileStmt (Dec sp n ex) = 
-    Dec sp n <$> 
-    precheckTrm ex   
-precheckFileStmt stmt = pure stmt 
+checkRegForContainer :: SP -> Text -> Meta -> Checker () 
+checkRegForContainer sp1 n m1 = do
+    reg <- gets registry 
+    case Data.Map.lookup n reg of 
+        Just (sp2, m2) | matchesType m1 m2 -> void $ do 
+            when (getArity m1 /= getArity m2) $ 
+                throwError $ arityMismatch sp1 sp2 n
+            when (isDef m1 && isDef m2) $
+                throwError $ alreadyDefined sp1 sp2 n
+            insertReg sp1 n m1
+        Just (sp2, _) -> throwError $ alreadyDeclared sp1 sp2 n
+        Nothing -> void $ do 
+            insertPro sp1 n
+            insertReg sp1 n m1
+    where 
+        matchesType IsSum {} IsSum {} = True 
+        matchesType IsRec {} IsRec {} = True 
+        matchesType _ _ = False 
+        getArity (IsSum n _) = n 
+        getArity (IsRec n _) = n 
+        getArity _ = error "bad meta type passed to checkRegForContainer"
+        isDef (IsSum _ b) = b 
+        isDef (IsRec _ b) = b
+
+checkRegForBinding :: SP -> Text -> Meta -> Checker () 
+checkRegForBinding sp1 n m1 = do 
+    reg <- gets registry 
+    case Data.Map.lookup n reg of
+        Just (sp2, m2) -> if matchesType m1 m2 
+            then throwError $ alreadyDefined sp1 sp2 n 
+            else void $ do 
+                when (getSpes m1 /= getSpes m2) $ 
+                    throwError $ specifierMismatch sp1 sp2 n 
+                insertReg sp1 n m1
+        Nothing -> void $ do 
+            insertPro sp1 n
+            insertReg sp1 n m1
+    where 
+        matchesType IsFun {} IsFun {} = True 
+        matchesType IsTrm {} IsTrm {} = True
+        matchesType _ _ = False
+
+        getSpes (IsFun s) = s
+        getSpes (IsTrm s) = s 
+        getSpes (IsDec s)  = s
+        getSpes _ = error "bad meta type passed to checkRegForBinding" 
+
+liftVars :: ExpTransform m => SymTbl a -> m a -> m a
+liftVars tbl = mapIdens $ \p v -> 
+    if Data.Map.member v tbl
+        then Iden p v
+        else Var p v
+
+preFileStmt :: FileStmt SP -> Checker (FileStmt SP) 
+preFileStmt stmt@(Rec sp n ps ms) = do
+    let ent = IsRec (L.length ps) (isJust ms) 
+    checkRegForContainer sp (unname n) ent
+    pro <- gets provenance
+    pure $ Rec sp n ps (fmap (preMemb pro) <$> ms) 
+    where 
+        preMemb tbl (Memb mn mx) = Memb mn $ liftVars tbl mx
+     
+preFileStmt stmt@(Sum sp n ps ms) = do
+    checkRegForContainer sp (unname n) $ IsSum (L.length ps) (isJust ms)
+    pro <- gets provenance 
+    pure $ Sum sp n ps (fmap (preInj pro) <$> ms) 
+    where 
+        preInj tbl (Inj mn mx) = Inj mn $ liftVars tbl mx
+
+preFileStmt (Fun sps (Name p n) args body) = do
+    let sps' = reduceSpecifiers sps
+    checkRegForBinding p n $ IsFun sps' 
+    pro <- gets provenance
+    pure $ Fun sps' (Name p n) (liftVars pro <$> args) (liftVars pro body)
+
+preFileStmt (Trm sps (Name p n) ex) = do
+    let sps' = reduceSpecifiers sps
+    checkRegForBinding p n $ IsTrm sps' 
+    pro <- gets provenance 
+    pure $ Trm sps' (Name p n) (liftVars pro ex)
+
+preFileStmt (Dec sps (Name p n) ex) = do
+    let sps' = reduceSpecifiers sps 
+    checkRegForBinding p n $ IsDec sps' 
+    pro <- gets provenance 
+    pure $ Dec sps' (Name p n) (liftVars pro ex) 
+
+preFileStmt stmt = pure stmt
+
+--     Imp a Text | 
+--     Inc a Text | 
+--     Ext a (Name a) (Exp a) Text |
+--     Lay a (Name a) (Layout a)

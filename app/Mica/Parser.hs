@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Mica.Parser where
+
 import Mica.Grouper
 import Mica.Lexer
 import Mica.Type
@@ -17,8 +18,8 @@ import qualified Data.Set as Set
 type Parser = Parsec Void [LexTree SP]
 
 data OpTy = 
-    Binary |
-    Prefix |
+    Binary | 
+    Prefix | 
     Postfix 
     deriving (Eq, Ord, Show)
 
@@ -286,13 +287,13 @@ pMemb = Memb <$> pIden Name <* pExpectOp ":" <*> pExp
 pInj :: Parser (Inj SP)
 pInj = Inj <$> pIden Name <* pExpectOp ":" <*> pExp
 
-pSpec :: Parser (Spe SP)
+pSpec :: Parser Spe
 pSpec =
     let 
-        pStat = Static <$> pExpectIden "static"
-        pTL = ThreadLocal <$> pExpectIden "thread_local" 
-        pMut = Mutable <$> pExpectIden "mutable"
-        pNR = NoReturn <$> pExpectIden "no_return" 
+        pStat = Static <$ pExpectIden "static"
+        pTL = ThreadLocal <$ pExpectIden "thread_local" 
+        pMut = Mutable <$ pExpectIden "mutable"
+        pNR = NoReturn <$ pExpectIden "no_return" 
     in 
         pStat <|> pTL <|> pMut <|> pNR
   
@@ -307,12 +308,12 @@ pFileStmt =
         pSum = pExpectIden "variant" >>= \p -> 
             Sum p <$> 
                 pIden Name <*> 
-                (pExp <* pExpectOp "=") <*>
+                (many (pIden Name) <* pExpectOp "=") <*>
                 pOpt (pCurly $ pInj `sepEndBy` pExpectOp ";")
         pRec = pExpectIden "record" >>= \p -> 
             Rec p <$> 
                 pIden Name <*> 
-                (pExp <* pExpectOp "=") <*>
+                (many (pIden Name) <* pExpectOp "=") <*>
                 pOpt (pCurly $ pMemb `sepEndBy` pExpectOp ";")
         pExt = pExpectIden "foreign" >>= \p -> 
             Ext p <$> pIden Name <*> pExp <*> pRawStrLit

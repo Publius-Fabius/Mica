@@ -1,43 +1,46 @@
-##import and include to name, value 
 
-record Entry : * -> *;   // foward dec
+import "Something.mica" 
+include "sys/epoll.h" 
 
-record Entry : * -> * = {
-    one : Int;
-    two : Int;
+record Entry a;                            // foward dec 
+
+// type parameters without monomorphization bloat
+
+record Entry a = {                        // parameters must hide behind ptrs
+    values : [*a];                        // bounds checking on array deref
+    offset : Int;
 }
 
-variant Maybe : * -> * = {
-    Just : a -> Maybe a;
+// sizeof(Entry a) is known! (36 bytes)
+// offset = 4 bytes
+// values = 24 bytes
+// values.length = 8 bytes 
+
+// tagged unions
+
+variant Maybe : Kind -> Kind = {
+    Just : *a -> Maybe a;
     Nothing : Maybe a;
 }
 
-static f : (Int, Int) -> Int;             // normal function declaration 
-f (x, y:Int) = x + y;                     // function definition 
-^     ^      
-|     |----Type annotation is allowed (already doing args with let anyway)
+// sizeof(Mayba a) ~ 12 (without padding)
+// *a = 8 
+// tag = 4
+
+static f : (Int, Int) -> Int;             // normal declaration 
+static f (x, y:Int) = x + y;              // function definition 
+^               ^      
+|               |----Type annotation is allowed 
 |
-|-- No specifiers allowed 
+|---- Specifiers must match in definition 
 
 thread_local mutable fact : Int;
 fact = 1;
 
-Rec :: (Name a) (Exp a) (Maybe [Memb])       -- Can Be Forward Dec or Def 
-Sum :: (Name a) (Exp a) (Maybe [Inj])        -- No matter what, expect a kind
-Dec :: (Set Spec) (Name a) (Exp a) 
-Fun :: (Set Spec) (Name a) [Arg a] (Body a)
-Trm :: (Set Spec) (Name a) (Exp a)
-Ext :: (Name a) (Exp a) Text 
+foreign Event : Kind = struct epoll_event;
+layout Event = { event : Int, data { ...etc... } };
 
-extern Event : Kind = struct epoll_event;
-layout Event = { event : Int, data { ...etc... } };     
+// (a --> b) == 16 Byte Fat Pointer (Closure)
+// (a *-> b) == 8 Byte Function Pointer
 
-(a --> b) == 16 Byte Fat Pointer (Closure)
-(a *-> b) == 8 Byte Function Pointer
 
-record :: Name (Maybe Kind) (Maybe RecordBody)
-variant :: Name (Maybe Kind) (Maybe VariantBody)
-fundef :: [Spec] Name [Name (Maybe Type)] (Maybe Term)
-trmdef :: [Spec] Name (Maybe Type) (Maybe Term)
-extern :: Name Type Term
-layout :: ...
